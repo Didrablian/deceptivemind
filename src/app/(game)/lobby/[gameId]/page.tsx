@@ -11,7 +11,8 @@ import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2, Users, Play, Copy, LogOut } from 'lucide-react';
 
-const MAX_PLAYERS = 5;
+// MAX_PLAYERS will now be derived from gameState.maxPlayers
+// MIN_PLAYERS will now be derived from gameState.minPlayers
 
 export default function LobbyPage() {
   const router = useRouter();
@@ -21,9 +22,8 @@ export default function LobbyPage() {
   const { toast } = useToast();
   const [isStartingGame, setIsStartingGame] = useState(false);
 
-  // Redirect to game page if game status changes from lobby
   useEffect(() => {
-    if (gameState && gameState.status !== "lobby" && gameState.status !== "finished" /* allow staying if game just finished */) {
+    if (gameState && gameState.status !== "lobby" && gameState.status !== "finished") {
       router.push(`/game/${gameState.gameId}`);
     }
   }, [gameState, router]);
@@ -33,29 +33,29 @@ export default function LobbyPage() {
       toast({ title: "Not Host", description: "Only the host can start the game.", variant: "destructive" });
       return;
     }
-    if (gameState.players.length !== MAX_PLAYERS) {
-      toast({ title: "Not Enough Players", description: `Need ${MAX_PLAYERS} players to start. Currently ${gameState.players.length}.`, variant: "destructive" });
+    if (gameState.players.length < gameState.minPlayers || gameState.players.length > gameState.maxPlayers) {
+      toast({ title: "Incorrect Player Count", description: `Need ${gameState.minPlayers}-${gameState.maxPlayers} players to start. Currently ${gameState.players.length}.`, variant: "destructive" });
       return;
     }
     setIsStartingGame(true);
-    await startGameAI(); // This function now handles toasts for success/failure
-    setIsStartingGame(false); // startGameAI will change status, useEffect will redirect
+    await startGameAI(); 
+    setIsStartingGame(false); 
   };
 
   const copyGameId = () => {
     if (!gameId) return;
     navigator.clipboard.writeText(gameId)
       .then(() => toast({ title: "Game ID Copied!", description: `${gameId} copied to clipboard.` }))
-      .catch(() => toast({ title: "Copy Failed", description: "Could not copy Game ID.", variant: "destructive" }));
+      .catch(() => toast({ title: "Copy Failed", variant: "destructive" }));
   };
   
   const handleLeaveLobby = async () => {
-    await leaveGame(); // leaveGame will update Firestore
+    await leaveGame();
     router.push('/');
-    toast({ title: "Left Lobby", description: "You have left the game lobby." });
+    toast({ title: "Left Lobby" });
   };
 
-  if (isLoading || !gameState && gameId) { // if gameId exists but gameState is null, it's loading or not found
+  if (isLoading || !gameState && gameId) {
     return (
       <div className="flex flex-col items-center justify-center flex-grow">
         <Loader2 className="h-16 w-16 animate-spin text-primary mb-4" />
@@ -65,7 +65,6 @@ export default function LobbyPage() {
   }
 
   if (!gameState) {
-     // This can happen if gameIdFromParams was undefined, or Firestore listener found no doc
     return (
       <div className="flex flex-col items-center justify-center flex-grow">
         <p className="text-xl text-destructive">Lobby not found or error loading game.</p>
@@ -74,8 +73,8 @@ export default function LobbyPage() {
     );
   }
   
-  // If game has started and user is trying to access lobby directly
-  if (gameState.status !== 'lobby') {
+  if (gameState.status !== 'lobby' && gameState.status !== 'finished') {
+     // Redirect if game started and user is trying to access lobby
     router.push(`/game/${gameId}`);
     return (
         <div className="flex flex-col items-center justify-center flex-grow">
@@ -85,8 +84,13 @@ export default function LobbyPage() {
     );
   }
 
+  const canStart = gameState.players.length >= gameState.minPlayers && 
+                   gameState.players.length <= gameState.maxPlayers && 
+                   localPlayerId === gameState.hostId;
+  const playersNeededText = gameState.players.length < gameState.minPlayers 
+    ? `Waiting for ${gameState.minPlayers - gameState.players.length} more players to reach minimum of ${gameState.minPlayers}...`
+    : `Ready with ${gameState.players.length} players. (Max ${gameState.maxPlayers})`;
 
-  const canStart = gameState.players.length === MAX_PLAYERS && localPlayerId === gameState.hostId;
 
   return (
     <Card className="w-full flex-grow flex flex-col shadow-xl">
@@ -98,18 +102,21 @@ export default function LobbyPage() {
           </Button>
         </div>
         <CardDescription>
-          Waiting for players to join. Game ID: <Badge variant="secondary" className="text-lg cursor-pointer" onClick={copyGameId}>{gameId} <Copy className="ml-2 h-4 w-4"/></Badge>
+          Share Game ID: <Badge variant="secondary" className="text-lg cursor-pointer" onClick={copyGameId}>{gameId} <Copy className="ml-2 h-4 w-4"/></Badge>
         </CardDescription>
       </CardHeader>
       <CardContent className="flex-grow flex flex-col space-y-6">
         <div className="flex items-center justify-between">
-          <h3 className="text-xl font-semibold flex items-center"><Users className="mr-2 h-6 w-6 text-primary" />Players ({gameState.players.length}/{MAX_PLAYERS})</h3>
-          {gameState.players.length < MAX_PLAYERS && (
+          <h3 className="text-xl font-semibold flex items-center"><Users className="mr-2 h-6 w-6 text-primary" />Players ({gameState.players.length}/{gameState.maxPlayers})</h3>
+          {gameState.players.length < gameState.minPlayers && (
             <div className="flex items-center text-sm text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Waiting for {MAX_PLAYERS - gameState.players.length} more players...
+              {playersNeededText}
             </div>
           )}
+           {gameState.players.length >= gameState.minPlayers && (
+             <p className="text-sm text-green-600">{playersNeededText}</p>
+           )}
         </div>
         <ScrollArea className="h-64 border rounded-md p-4 bg-background/50">
           {gameState.players.length > 0 ? (
@@ -140,7 +147,7 @@ export default function LobbyPage() {
           ) : (
             <Play className="mr-2 h-5 w-5" />
           )}
-          {isStartingGame ? 'Starting Game...' : `Start Game (${gameState.players.length}/${MAX_PLAYERS})`}
+          {isStartingGame ? 'Starting Game...' : `Start Game (${gameState.players.length} players)`}
         </Button>
       </CardFooter>
     </Card>

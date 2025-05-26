@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useEffect, useState } from 'react';
@@ -13,7 +14,7 @@ export default function GamePage() {
   const router = useRouter();
   const params = useParams();
   const gameId = Array.isArray(params.gameId) ? params.gameId[0] : params.gameId;
-  const { gameState, localPlayerId, dispatch } = useGame();
+  const { gameState, localPlayerId, acknowledgeRole } = useGame(); // Added acknowledgeRole
   const { toast } = useToast();
   const [isClient, setIsClient] = useState(false);
 
@@ -21,26 +22,21 @@ export default function GamePage() {
     setIsClient(true);
   }, []);
 
-  // Redirect if game state is not properly loaded or user is not part of the game
   useEffect(() => {
     if (isClient && gameState) {
       if (gameState.status === "lobby" && gameId) {
-        // If somehow ended up on game page while game is in lobby, redirect to lobby
         router.push(`/lobby/${gameId}`);
         return;
       }
       if (!localPlayerId || !gameState.players.find(p => p.id === localPlayerId)) {
-        // If local player is not in the game, redirect to home.
-        toast({ title: "Not in game", description: "You are not part of this game session.", variant: "destructive"});
+        toast({ title: "Not in game", variant: "destructive"});
         router.push('/');
       }
     } else if (isClient && !gameState && gameId) {
-      // Attempt to load or if no game state exists for this ID, redirect.
-      // This is a simplified check. A robust solution needs backend validation.
-      const storedGame = localStorage.getItem(`dm_gameState_${gameId}`);
-      if (!storedGame) {
-        toast({ title: "Game not found", description: "This game session does not exist or has ended.", variant: "destructive"});
-        router.push('/');
+      const storedGame = typeof window !== 'undefined' ? localStorage.getItem(`dm_gameState_${gameId}`) : null; // Check if needed
+      if (!storedGame) { // This check is less relevant with Firestore but kept for robustness
+        // toast({ title: "Game not found", variant: "destructive"}); // Already handled by context
+        // router.push('/');
       }
     }
   }, [isClient, gameState, localPlayerId, router, gameId, toast]);
@@ -57,23 +53,26 @@ export default function GamePage() {
 
   const localPlayer = gameState.players.find(p => p.id === localPlayerId);
   if (!localPlayer) {
-     // Should be caught by useEffect, but as a safeguard
     return <p>Error: Player data not found.</p>;
   }
 
   switch (gameState.status) {
     case 'role-reveal':
-      return <RoleRevealScreen player={localPlayer} targetWord={gameState.targetWord} onContinue={() => dispatch({ type: 'SET_STATUS', payload: 'playing' })} />;
-    case 'playing':
-    case 'meeting': // GameplayScreen might handle sub-states like 'meeting'
-    case 'accusation':
+      return <RoleRevealScreen player={localPlayer} targetWord={gameState.targetWord} onContinue={acknowledgeRole} />;
+    case 'discussion':
+    case 'word-elimination':
+    case 'word-lock-in-attempt': // Should be handled within GameplayScreen or lead to new state
+    case 'post-guess-reveal':
       return <GameplayScreen />;
     case 'finished':
-      return <GameOverScreen winner={gameState.winner} gameLog={gameState.gameLog} localPlayer={localPlayer} players={gameState.players} />;
+      return <GameOverScreen 
+                winner={gameState.winner} 
+                winningReason={gameState.winningReason} 
+                gameLog={gameState.gameLog} 
+                localPlayer={localPlayer} 
+                players={gameState.players} 
+             />;
     default:
-      // This case includes 'lobby' or any unexpected status.
-      // If it's 'lobby', the useEffect should redirect.
-      // For others, show loading or an error.
       return (
         <div className="flex flex-col items-center justify-center flex-grow">
           <Loader2 className="h-16 w-16 animate-spin text-primary mb-4" />

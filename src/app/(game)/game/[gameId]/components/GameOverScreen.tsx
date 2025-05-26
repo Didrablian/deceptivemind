@@ -1,3 +1,4 @@
+
 "use client";
 
 import React from 'react';
@@ -7,10 +8,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { Award, Users, ShieldCheck, ShieldX, Eye, UserCheck, UserX, Info, MessageSquare, ShieldQuestion, RotateCcw } from 'lucide-react';
+import { Award, Users, ShieldCheck, ShieldX, Eye, UserCheck, UserX, Info, MessageSquare, ShieldQuestion, RotateCcw, TrendingUp } from 'lucide-react';
 
 interface GameOverScreenProps {
   winner?: GameState['winner'];
+  winningReason?: GameState['winningReason'];
   gameLog: string[];
   localPlayer: Player;
   players: Player[];
@@ -26,43 +28,30 @@ const RoleIconMini: React.FC<{ role: Player['role'] }> = ({ role }) => {
   }
 };
 
-export default function GameOverScreen({ winner, gameLog, localPlayer, players }: GameOverScreenProps) {
+export default function GameOverScreen({ winner, winningReason, gameLog, localPlayer, players }: GameOverScreenProps) {
   const router = useRouter();
 
   let titleText = "Game Over!";
-  let descriptionText = "The session has concluded.";
+  let descriptionText = winningReason || "The session has concluded.";
   let titleIcon = <Award className="w-12 h-12 text-yellow-500" />;
 
   if (winner === 'Imposters') {
     titleText = "Imposters Win!";
-    descriptionText = "Deception reigns supreme. The Imposters have outsmarted everyone.";
     titleIcon = <ShieldX className="w-12 h-12 text-destructive" />;
-  } else if (winner === 'GoodTeam') {
-    titleText = "Good Team Wins!";
-    descriptionText = "Truth prevails! The Communicator, Helper, and Clue Holders have unmasked the Imposters.";
+  } else if (winner === 'Team' || winner === 'GoodTeam') { // GoodTeam is legacy, use Team
+    titleText = "Team Wins!";
     titleIcon = <ShieldCheck className="w-12 h-12 text-green-500" />;
-  } else if (winner === 'NoOne') {
-    titleText = " Stalemate!";
-    descriptionText = "The Imposters failed their accusation, but the good team couldn't secure victory either.";
+  } else if (winner === 'NoOne') { // This case might be less frequent with new rules
+    titleText = "Stalemate!";
      titleIcon = <Users className="w-12 h-12 text-muted-foreground" />;
   }
 
-
   const handlePlayAgain = () => {
-    // In a real app, this would clear game state or create a new game session.
-    // For this demo, we'll just redirect to the home page.
-    // Clear local storage for this game to allow re-joining/creating
-    if (typeof window !== 'undefined' && gameState?.gameId) {
-      localStorage.removeItem(`dm_gameState_${gameState.gameId}`);
-    }
+    // For Firestore, a new game creation is needed. Redirect to home.
+    // No local storage to clear specific to game state like before.
+    // Player ID and username are kept in local storage for convenience.
     router.push('/');
   };
-
-  // Find gameState.gameId from players if needed (though it's not passed directly)
-  // This is a bit of a hack for the demo to clear local storage.
-  // A better way would be to have gameId available in this component.
-  const gameState = typeof window !== 'undefined' ? players.length > 0 ? JSON.parse(localStorage.getItem(`dm_gameState_${(JSON.parse(localStorage.getItem('dm_localPlayerId') || '""') as string).slice(0,6)}`) || '{}') as GameState : null : null;
-
 
   return (
     <div className="fixed inset-0 bg-background/90 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-fadeIn">
@@ -74,16 +63,19 @@ export default function GameOverScreen({ winner, gameLog, localPlayer, players }
         </CardHeader>
         <CardContent className="space-y-6">
           <div>
-            <h3 className="text-xl font-semibold mb-2 text-center text-primary">Final Roles & Status</h3>
+            <h3 className="text-xl font-semibold mb-2 text-center text-primary flex items-center justify-center gap-2">
+              <TrendingUp /> Final Scores & Roles
+            </h3>
             <ScrollArea className="h-48 border rounded-md p-3 bg-secondary/20">
               <ul className="space-y-2">
                 {players.map((p) => (
-                  <li key={p.id} className={`flex items-center justify-between p-2 rounded-md ${p.id === localPlayer.id ? 'bg-primary/10' : 'bg-card'}`}>
-                    <div className="flex items-center gap-2">
+                  <li key={p.id} className={`flex items-center justify-between p-3 rounded-md ${p.id === localPlayer.id ? 'bg-primary/10 ring-1 ring-primary' : 'bg-card'}`}>
+                    <div className="flex items-center gap-3">
                       <RoleIconMini role={p.role} />
-                      <span className="font-medium">{p.name} {p.id === localPlayer.id && "(You)"}</span>
+                      <span className="font-medium text-lg">{p.name} {p.id === localPlayer.id && "(You)"}</span>
+                      <Badge variant={p.role === "Imposter" ? "destructive" : "secondary"} className="text-xs">{p.role}</Badge>
                     </div>
-                    <Badge variant={p.role === "Imposter" ? "destructive" : "secondary"}>{p.role}</Badge>
+                    <Badge variant="outline" className="text-lg font-bold text-accent">{p.score} pts</Badge>
                   </li>
                 ))}
               </ul>
@@ -96,6 +88,7 @@ export default function GameOverScreen({ winner, gameLog, localPlayer, players }
               {gameLog.map((log, index) => (
                 <p key={index} className="mb-1 last:mb-0">&raquo; {log}</p>
               ))}
+              {gameLog.length === 0 && <p>No game events logged.</p>}
             </ScrollArea>
           </div>
         </CardContent>

@@ -6,29 +6,85 @@ import { useGame } from '@/context/GameContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import type { Player, GameWord } from '@/lib/types'; // ChatMessage is part of GameState now
-import { Send, Users, ShieldAlert, HelpCircle, Eye, MessageSquare, Megaphone, Loader2 } from 'lucide-react';
+import type { Player, GameWord } from '@/lib/types';
+import { Send, Users, ShieldAlert, HelpCircle, Eye, MessageSquare, Loader2, Trash2, CheckSquare, ZoomIn } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-// generateShortId is not needed here, messages are created in context
 
-const WordDisplay: React.FC<{ word: GameWord, player: Player }> = ({ word, player }) => {
+const WordDisplay: React.FC<{ 
+  word: GameWord, 
+  player: Player, 
+  isCommunicator: boolean,
+  onEliminate?: (wordText: string) => void,
+  onSelectForLockIn?: (wordText: string) => void,
+  isSelectedForLockIn?: boolean,
+  gameStatus: GameState['status'],
+}> = ({ word, player, isCommunicator, onEliminate, onSelectForLockIn, isSelectedForLockIn, gameStatus }) => {
   const knowsTarget = player.role === 'Helper' || player.role === 'Imposter';
-  const highlightClass = knowsTarget && word.isTarget ? 'bg-accent/20 border-accent ring-2 ring-accent' : 'bg-card hover:bg-secondary/30';
-  
+  let highlightClass = knowsTarget && word.isTarget ? 'bg-accent/20 border-accent ring-2 ring-accent' : 'bg-card hover:bg-secondary/30';
+  if (word.isEliminated) {
+    highlightClass = 'bg-muted/50 text-muted-foreground line-through opacity-70';
+  } else if (isSelectedForLockIn) {
+    highlightClass = 'ring-2 ring-primary bg-primary/10';
+  }
+
+  const canEliminate = isCommunicator && !word.isEliminated && (gameStatus === 'discussion' || gameStatus === 'word-elimination');
+  const canSelectForLockIn = !word.isEliminated && (gameStatus === 'discussion' || gameStatus === 'word-elimination');
+
   return (
-    <div className={`p-3 rounded-lg shadow text-center font-medium text-lg transition-all ${highlightClass}`}>
+    <div 
+      className={`p-3 rounded-lg shadow text-center font-medium text-lg transition-all relative ${highlightClass} ${ (canEliminate || canSelectForLockIn) ? 'cursor-pointer' : ''}`}
+      onClick={() => {
+        if (canEliminate && onEliminate) {
+          // Handled by explicit button now
+        } else if (canSelectForLockIn && onSelectForLockIn) {
+          onSelectForLockIn(word.text);
+        }
+      }}
+    >
       {word.text}
-      {knowsTarget && word.isTarget && <Badge variant="outline" className="ml-2 border-accent text-accent text-xs">TARGET</Badge>}
+      {knowsTarget && word.isTarget && !word.isEliminated && <Badge variant="outline" className="ml-2 border-accent text-accent text-xs">TARGET</Badge>}
+      {word.isEliminated && <Badge variant="destructive" className="absolute top-1 right-1 text-xs">GONE</Badge>}
+      
+      {canEliminate && onEliminate && (
+         <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button variant="destructive" size="sm" className="absolute bottom-1 right-1 opacity-80 hover:opacity-100" onClick={(e) => e.stopPropagation()}>
+              <Trash2 className="w-3 h-3"/>
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Eliminate "{word.text}"?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This action cannot be undone. Are you sure you want to eliminate this word?
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel onClick={(e) => e.stopPropagation()}>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={(e) => {e.stopPropagation(); onEliminate(word.text);}} className="bg-destructive hover:bg-destructive/90">Confirm Elimination</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
     </div>
   );
 };
 
-const PlayerCard: React.FC<{ player: Player, isLocalPlayer: boolean, onAccuse?: (playerId: string) => void, localPlayerRole?: Player['role'] }> = ({ player, isLocalPlayer, onAccuse, localPlayerRole }) => {
+const PlayerCard: React.FC<{ 
+  player: Player, 
+  isLocalPlayer: boolean, 
+  isAccuserRole: boolean, // True if local player is Imposter in post-guess-reveal
+  onAccuseHelper?: (playerId: string) => void,
+  gameStatus: GameState['status']
+}> = ({ player, isLocalPlayer, isAccuserRole, onAccuseHelper, gameStatus }) => {
   let icon;
-  if (isLocalPlayer) {
+  // Show roles if game is in post-guess-reveal or finished, or if it's the local player
+  const showRealRole = gameStatus === 'post-guess-reveal' || gameStatus === 'finished' || isLocalPlayer || player.isRevealedImposter;
+
+  if (showRealRole) {
     switch (player.role) {
       case 'Communicator': icon = <Eye className="w-4 h-4 text-blue-500" />; break;
       case 'Helper': icon = <HelpCircle className="w-4 h-4 text-green-500" />; break;
@@ -45,23 +101,24 @@ const PlayerCard: React.FC<{ player: Player, isLocalPlayer: boolean, onAccuse?: 
         {icon}
         <span className={`font-medium ${isLocalPlayer ? 'text-primary' : ''}`}>{player.name}</span>
         {isLocalPlayer && <Badge variant="outline">(You)</Badge>}
+        {showRealRole && <Badge variant="secondary" className="text-xs">{player.role}</Badge>}
+         {player.isRevealedImposter && !isLocalPlayer && <Badge variant="destructive" className="text-xs">Imposter</Badge>}
       </div>
-      {localPlayerRole === 'Imposter' && !isLocalPlayer && player.isAlive && onAccuse && (
+      {isAccuserRole && !isLocalPlayer && player.isAlive && onAccuseHelper && gameStatus === 'post-guess-reveal' && (
         <AlertDialog>
           <AlertDialogTrigger asChild>
-            <Button variant="destructive" size="sm" disabled={!player.isAlive}>Accuse Helper</Button>
+            <Button variant="destructive" size="sm">Accuse Helper</Button>
           </AlertDialogTrigger>
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Accuse {player.name} of being the Helper?</AlertDialogTitle>
               <AlertDialogDescription>
-                Imposters get one chance per team to correctly identify the Helper.
-                If you are wrong, your team loses immediately. This action is final.
+                If you are correct, Imposters win. If wrong, Team wins. This action is final.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={() => onAccuse(player.id)} className="bg-destructive hover:bg-destructive/90">Confirm Accusation</AlertDialogAction>
+              <AlertDialogAction onClick={() => onAccuseHelper(player.id)} className="bg-destructive hover:bg-destructive/90">Confirm Accusation</AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
@@ -72,8 +129,9 @@ const PlayerCard: React.FC<{ player: Player, isLocalPlayer: boolean, onAccuse?: 
 
 
 export default function GameplayScreen() {
-  const { gameState, localPlayerId, sendChatMessage, accuseHelper, callMeeting, isLoading, updatePlayerInContext } = useGame();
+  const { gameState, localPlayerId, sendChatMessage, eliminateWord, lockInWord, imposterAccuseHelperInTwist, isLoading } = useGame();
   const [chatInput, setChatInput] = useState('');
+  const [selectedWordToLockIn, setSelectedWordToLockIn] = useState<string | null>(null);
   const { toast } = useToast();
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
@@ -89,8 +147,7 @@ export default function GameplayScreen() {
 
   const localPlayer = gameState.players.find(p => p.id === localPlayerId);
   if (!localPlayer) {
-    // This case should ideally be handled by redirecting if player is not in game
-    return <p className="text-center text-destructive p-4">Error: Local player data not found in game. You might have been removed or an error occurred.</p>;
+    return <p className="text-center text-destructive p-4">Error: Local player data not found.</p>;
   }
 
   const handleSendChat = async () => {
@@ -99,23 +156,33 @@ export default function GameplayScreen() {
     setChatInput('');
   };
 
-  const handleAccuseHelper = async (accusedPlayerId: string) => {
-    if (localPlayer.role !== 'Imposter') {
-      toast({title: "Invalid Action", description: "Only Imposters can accuse the Helper.", variant: "destructive"});
+  const handleEliminateWord = async (wordText: string) => {
+    if (localPlayer.role !== 'Communicator') {
+      toast({title: "Invalid Action", description: "Only the Communicator can eliminate words.", variant: "destructive"});
       return;
     }
-    // Accusation limit logic is now within the accuseHelper context function
-    await accuseHelper(accusedPlayerId);
+    await eliminateWord(wordText);
+  };
+
+  const handleLockInWord = async () => {
+    if (!selectedWordToLockIn) {
+      toast({title: "No Word Selected", description: "Please select a word from the grid to lock in.", variant: "default"});
+      return;
+    }
+    await lockInWord(selectedWordToLockIn);
+    setSelectedWordToLockIn(null); // Reset selection
+  };
+
+  const handleImposterAccuseHelper = async (accusedPlayerId: string) => {
+    await imposterAccuseHelperInTwist(accusedPlayerId);
   };
   
-  const handleCallMeeting = async () => {
-    // Logic for disabling button and conditions is now handled by context or derived from gameState
-    await callMeeting();
-  };
+  const isCommunicator = localPlayer.role === 'Communicator';
+  const isImposterDuringTwist = localPlayer.role === 'Imposter' && gameState.status === 'post-guess-reveal';
 
   return (
     <div className="flex flex-col lg:flex-row gap-4 h-full flex-grow p-1 sm:p-4 bg-background rounded-lg shadow-inner">
-      {/* Left Panel: Players & Actions */}
+      {/* Left Panel: Players & Info */}
       <Card className="lg:w-1/3 flex flex-col">
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Users className="text-primary" /> Players</CardTitle>
@@ -126,46 +193,67 @@ export default function GameplayScreen() {
               key={p.id} 
               player={p} 
               isLocalPlayer={p.id === localPlayer.id}
-              onAccuse={handleAccuseHelper}
-              localPlayerRole={localPlayer.role}
+              isAccuserRole={isImposterDuringTwist}
+              onAccuseHelper={handleImposterAccuseHelper}
+              gameStatus={gameState.status}
             />
           ))}
         </CardContent>
-        <div className="p-4 border-t">
-            <Button 
-                onClick={handleCallMeeting} 
-                className="w-full bg-accent text-accent-foreground hover:bg-accent/90"
-                disabled={localPlayer.hasCalledMeeting || gameState.meetingsCalled >= gameState.maxMeetings || gameState.status === 'meeting'}
-            >
-                <Megaphone className="mr-2 h-4 w-4" /> Call Emergency Meeting
-            </Button>
-            {(localPlayer.hasCalledMeeting || gameState.meetingsCalled >= gameState.maxMeetings) && (
-                <p className="text-xs text-muted-foreground text-center mt-1">
-                  {localPlayer.hasCalledMeeting ? "You've called a meeting." : "Meeting limit reached."}
-                </p>
+        <CardFooter className="p-4 border-t">
+          <div className="text-sm text-muted-foreground">
+            <p>Status: <Badge variant={gameState.status === 'finished' ? 'default' : 'secondary'}>{gameState.status.replace('-', ' ').toUpperCase()}</Badge></p>
+            <p>Eliminations: {gameState.eliminationCount}/{gameState.maxEliminations}</p>
+            {gameState.status === 'post-guess-reveal' && localPlayer.role === 'Imposter' && (
+              <p className="text-accent font-semibold mt-2">Your team guessed the word! Now, identify the Helper from the players list.</p>
             )}
-        </div>
+            {gameState.status === 'post-guess-reveal' && localPlayer.role !== 'Imposter' && (
+              <p className="text-primary font-semibold mt-2">The team guessed the word! Waiting for Imposters to accuse the Helper...</p>
+            )}
+          </div>
+        </CardFooter>
       </Card>
 
-      {/* Middle Panel: Word Grid */}
+      {/* Middle Panel: Word Grid & Actions */}
       <Card className="lg:w-1/3 flex flex-col">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-primary"><path d="M15.5,12C18,12 20,14 20,16.5C20,17.38 19.75,18.21 19.31,18.9L22.39,22L21,23.39L17.88,20.32C17.19,20.75 16.37,21 15.5,21C13,21 11,19 11,16.5C11,14 13,12 15.5,12M15.5,14A2.5,2.5 0 0,0 13,16.5A2.5,2.5 0 0,0 15.5,19A2.5,2.5 0 0,0 18,16.5A2.5,2.5 0 0,0 15.5,14M10,3H18C19.11,3 20,3.9 20,5V10.3C19.43,10.11 18.82,10 18.17,10H17V5H10V17H13.08C13.03,17.33 13,17.66 13,18C13,18.24 13.03,18.47 13.07,18.69L13,19H5C3.89,19 3,18.1 3,17V5C3,3.9 3.89,3 5,3H8V1H10V3M5,5V7H15V5H5M5,9V11H15V9H5M5,13V15H10V13H5Z" /></svg>
-            Words on the Board
+             <ZoomIn className="w-6 h-6 text-primary"/> Words on the Board
           </CardTitle>
         </CardHeader>
         <CardContent className="flex-grow grid grid-cols-3 gap-2 sm:gap-3 p-2 sm:p-4">
           {gameState.words.map((wordObj) => (
-            <WordDisplay key={wordObj.text} word={wordObj} player={localPlayer} />
+            <WordDisplay 
+              key={wordObj.text} 
+              word={wordObj} 
+              player={localPlayer} 
+              isCommunicator={isCommunicator}
+              onEliminate={isCommunicator ? handleEliminateWord : undefined}
+              onSelectForLockIn={setSelectedWordToLockIn}
+              isSelectedForLockIn={selectedWordToLockIn === wordObj.text}
+              gameStatus={gameState.status}
+            />
           ))}
         </CardContent>
-         {localPlayer.clue && (
-            <div className="p-4 border-t text-center">
+        <CardFooter className="p-4 border-t flex-col space-y-2">
+          {localPlayer.clue && (
+            <div className="text-center w-full mb-2">
                 <p className="text-sm text-muted-foreground">Your Clue:</p>
                 <p className="font-semibold text-primary italic">{localPlayer.clue}</p>
             </div>
-        )}
+          )}
+          {(gameState.status === 'discussion' || gameState.status === 'word-elimination') && (
+             <Button 
+                onClick={handleLockInWord} 
+                className="w-full bg-accent text-accent-foreground hover:bg-accent/90"
+                disabled={!selectedWordToLockIn || localPlayer.role === 'Communicator'} // Communicator eliminates, doesn't lock in
+             >
+                <CheckSquare className="mr-2 h-4 w-4" /> Lock In "{selectedWordToLockIn || 'Word'}"
+             </Button>
+          )}
+          {localPlayer.role === 'Communicator' && (gameState.status === 'discussion' || gameState.status === 'word-elimination') && (
+            <p className="text-xs text-center text-muted-foreground w-full">As Communicator, click the <Trash2 className="inline h-3 w-3"/> on a word to eliminate it.</p>
+          )}
+        </CardFooter>
       </Card>
 
       {/* Right Panel: Chat */}
@@ -191,13 +279,13 @@ export default function GameplayScreen() {
           <form onSubmit={(e) => { e.preventDefault(); handleSendChat(); }} className="flex gap-2">
             <Input 
               type="text" 
-              placeholder={localPlayer.role === "Communicator" ? "Communicators observe..." : "Type your message..."} 
+              placeholder={localPlayer.role === "Communicator" && gameState.status !== "post-guess-reveal" ? "Communicators guide via eliminations..." : "Type your message..."} 
               value={chatInput} 
               onChange={(e) => setChatInput(e.target.value)}
-              disabled={localPlayer.role === "Communicator"}
+              disabled={localPlayer.role === "Communicator" && gameState.status !== "post-guess-reveal"}
               className="flex-grow"
             />
-            <Button type="submit" size="icon" disabled={localPlayer.role === "Communicator"} className="bg-primary text-primary-foreground hover:bg-primary/90">
+            <Button type="submit" size="icon" disabled={localPlayer.role === "Communicator" && gameState.status !== "post-guess-reveal"} className="bg-primary text-primary-foreground hover:bg-primary/90">
               <Send className="h-5 w-5" />
             </Button>
           </form>

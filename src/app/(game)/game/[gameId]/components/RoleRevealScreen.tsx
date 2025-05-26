@@ -1,3 +1,4 @@
+
 "use client";
 
 import React from 'react';
@@ -5,7 +6,7 @@ import type { Player } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { getRoleExplanation } from '@/lib/gameUtils';
-import { Eye, UserCheck, UserX, Info, Zap, KeyRound, ShieldQuestion } from 'lucide-react';
+import { Eye, UserCheck, UserX, Info, Zap, KeyRound, ShieldQuestion, Users } from 'lucide-react'; // Added Users
 
 interface RoleRevealScreenProps {
   player: Player;
@@ -16,10 +17,10 @@ interface RoleRevealScreenProps {
 const RoleIcon: React.FC<{ role: Player['role'] }> = ({ role }) => {
   switch (role) {
     case 'Communicator': return <Eye className="w-8 h-8 text-primary" />;
-    case 'Helper': return <UserCheck className="w-8 h-8 text-green-500" />; // Or Zap/KeyRound for clue aspect
+    case 'Helper': return <UserCheck className="w-8 h-8 text-green-500" />;
     case 'Imposter': return <UserX className="w-8 h-8 text-destructive" />;
-    case 'ClueHolder': return <ShieldQuestion className="w-8 h-8 text-yellow-500" />; // Or KeyRound
-    default: return <Info className="w-8 h-8 text-muted-foreground" />;
+    case 'ClueHolder': return <ShieldQuestion className="w-8 h-8 text-yellow-500" />;
+    default: return <Users className="w-8 h-8 text-muted-foreground" />; // Changed default icon
   }
 };
 
@@ -35,7 +36,7 @@ export default function RoleRevealScreen({ player, targetWord, onContinue }: Rol
           </div>
           <CardTitle className="text-3xl font-bold text-primary">Your Role: {player.role}</CardTitle>
           <CardDescription className="text-md text-muted-foreground">
-            Memorize your objectives. Trust no one.
+            The game is afoot! Understand your objective.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -44,7 +45,7 @@ export default function RoleRevealScreen({ player, targetWord, onContinue }: Rol
           </div>
           {(player.role === "Helper" || player.role === "Imposter") && targetWord && (
              <p className="mt-4 text-center font-semibold text-lg">
-                The Target Word is: <span className="text-accent">{targetWord}</span>
+                The Secret Word is: <span className="text-accent">{targetWord}</span>
             </p>
           )}
           {((player.role === "Helper" || player.role === "ClueHolder") && player.clue) && (
@@ -55,7 +56,7 @@ export default function RoleRevealScreen({ player, targetWord, onContinue }: Rol
         </CardContent>
         <CardFooter>
           <Button onClick={onContinue} className="w-full text-lg py-3 bg-primary hover:bg-primary/80 text-primary-foreground">
-            Got It, Let's Play!
+            I Understand My Mission!
           </Button>
         </CardFooter>
       </Card>
