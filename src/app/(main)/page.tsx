@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useState, useEffect } from 'react';
@@ -7,9 +8,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { generateShortId } from '@/lib/gameUtils';
+import { generateShortId, initialGameState } from '@/lib/gameUtils'; // Import initialGameState
 import { useToast } from '@/hooks/use-toast';
-import { GameProvider, useGame } from '@/context/GameContext'; // Import GameProvider
+import { GameProvider, useGame } from '@/context/GameContext';
 import type { Player } from '@/lib/types';
 import { BrainCircuit } from 'lucide-react';
 
@@ -17,7 +18,7 @@ import { BrainCircuit } from 'lucide-react';
 function HomePageContent() {
   const router = useRouter();
   const { toast } = useToast();
-  const { dispatch, setLocalPlayerId, gameState } = useGame(); // Use useGame hook
+  const { dispatch, setLocalPlayerId, gameState } = useGame();
 
   const [username, setUsername] = useState('');
   const [gameIdToJoin, setGameIdToJoin] = useState('');
@@ -25,7 +26,6 @@ function HomePageContent() {
 
   useEffect(() => {
     setIsClient(true);
-    // Attempt to retrieve username from local storage
     const storedUsername = localStorage.getItem('dm_username');
     if (storedUsername) {
       setUsername(storedUsername);
@@ -63,31 +63,21 @@ function HomePageContent() {
     if (!validateInputs(true)) return;
 
     const newGameId = generateShortId();
-    const playerId = generateShortId(8); // Unique ID for the player
+    const playerId = localPlayerId || generateShortId(8); // Use existing or generate new
     setLocalPlayerId(playerId);
 
     const hostPlayer: Player = {
       id: playerId,
       name: username,
-      role: "Communicator", // Placeholder, will be assigned properly
+      role: "Communicator", 
       isHost: true,
       isAlive: true,
     };
     
-    // Initialize game state via context
-    // This is a simplified version. Ideally, backend confirms game creation.
-    // For now, we'll set it up locally and navigate.
-    // The GameProvider in (game)/layout.tsx will pick up this gameId.
-    
-    // Storing a minimal game setup intention for the lobby to pick up
     if (isClient) {
-      const initialLobbyState = {
-        gameId: newGameId,
-        players: [hostPlayer],
-        status: "lobby",
-        hostId: hostPlayer.id,
-      };
-      localStorage.setItem(`dm_gameState_${newGameId}`, JSON.stringify(initialLobbyState));
+      // Use initialGameState to create a complete GameState object
+      const newGame = initialGameState(newGameId, hostPlayer);
+      localStorage.setItem(`dm_gameState_${newGameId}`, JSON.stringify(newGame));
     }
 
     router.push(`/lobby/${newGameId}`);
@@ -97,30 +87,26 @@ function HomePageContent() {
   const handleJoinGame = () => {
     if (!validateInputs(false)) return;
 
-    const playerId = generateShortId(8);
+    const playerId = localPlayerId || generateShortId(8); // Use existing or generate new
     setLocalPlayerId(playerId);
 
     const joiningPlayer: Player = {
       id: playerId,
       name: username,
-      role: "Communicator", // Placeholder
+      role: "Communicator", 
       isAlive: true,
     };
 
-    // For demo: We assume the gameId exists. In a real app, you'd validate this gameId.
-    // The lobby page will handle adding this player to the existing game state loaded from localStorage.
     if (isClient) {
-       // A signal for the lobby to add this player. This is a workaround for no backend.
       localStorage.setItem(`dm_joining_player_${gameIdToJoin}`, JSON.stringify(joiningPlayer));
     }
-
 
     router.push(`/lobby/${gameIdToJoin}`);
     toast({ title: "Joining Game...", description: `Attempting to join game ID: ${gameIdToJoin}` });
   };
 
   if (!isClient) {
-    return null; // Or a loading spinner
+    return null; 
   }
 
   return (
@@ -175,12 +161,8 @@ function HomePageContent() {
   );
 }
 
-
-// Wrap HomePageContent with GameProvider so useGame can be used
 export default function HomePage() {
   return (
-    // The GameProvider here is mainly for setLocalPlayerId. 
-    // The main game state management will be in (game)/layout.tsx's GameProvider.
     <GameProvider> 
       <HomePageContent />
     </GameProvider>
