@@ -3,7 +3,7 @@
 
 import type { ReactNode } from 'react';
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
-import { doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, arrayRemove, increment, runTransaction, deleteDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, arrayRemove, increment, runTransaction, deleteDoc, serverTimestamp, type Timestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type { GameState, Player, GameWord, ChatMessage, Role } from '@/lib/types';
 import { initialGameState, generateShortId, assignRolesAndClues } from '@/lib/gameUtils';
@@ -15,11 +15,11 @@ interface GameContextProps {
   localPlayerId: string | null;
   setLocalPlayerId: (id: string | null) => void;
   isLoading: boolean;
-  isInitialized: boolean; // Added to ensure context is ready
+  isInitialized: boolean;
   createGame: (username: string) => Promise<string | null>;
   joinGame: (gameIdToJoin: string, username: string) => Promise<boolean>;
   startGameAI: () => Promise<void>;
-  dispatch: (action: { type: string, payload: any }) => Promise<void>;
+  dispatch: (action: { type: string, payload: any }) => Promise<void>; // Kept for generic actions if needed
   sendChatMessage: (text: string) => Promise<void>;
   accuseHelper: (accusedPlayerId: string) => Promise<void>;
   leaveGame: () => Promise<void>;
@@ -33,10 +33,9 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [localPlayerId, setLocalPlayerIdState] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isInitialized, setIsInitialized] = useState(false); // Track initialization
+  const [isInitialized, setIsInitialized] = useState(false);
   const { toast } = useToast();
 
-  // Initialize localPlayerId and gameId from URL/localStorage (client-side only)
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const storedPlayerId = localStorage.getItem('dm_localPlayerId');
@@ -47,19 +46,15 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         localStorage.setItem('dm_localPlayerId', newPlayerId);
         setLocalPlayerIdState(newPlayerId);
       }
-      // gameIdFromParams is used by the Firestore listener effect.
-      // No need to load gameState from localStorage anymore.
-      setIsInitialized(true); // Set initialized to true once IDs are sorted.
+      setIsInitialized(true);
     }
-  }, []); // gameIdFromParams removed as it's for Firestore listener
+  }, []);
 
-  // Subscribe to Firestore document for game state changes
   useEffect(() => {
     if (!isInitialized || !gameIdFromParams) {
-      // Don't try to subscribe if not initialized or no gameId
-      if (gameIdFromParams) setIsLoading(true); // Still loading if gameId is present but not initialized
+      if (gameIdFromParams) setIsLoading(true);
       else setIsLoading(false);
-      if (!gameIdFromParams) setGameState(null); // Clear game state if no gameId
+      if (!gameIdFromParams) setGameState(null);
       return;
     }
     
@@ -67,12 +62,21 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     const gameDocRef = doc(db, "games", gameIdFromParams);
     const unsubscribe = onSnapshot(gameDocRef, (docSnap) => {
       if (docSnap.exists()) {
-        setGameState(docSnap.data() as GameState);
+        const data = docSnap.data() as GameState;
+        // Ensure server timestamps are converted to JS Dates or numbers for chatMessages
+        const processedData = {
+          ...data,
+          chatMessages: data.chatMessages ? data.chatMessages.map(msg => ({
+            ...msg,
+            timestamp: msg.timestamp && (msg.timestamp as unknown as Timestamp).toDate ? (msg.timestamp as unknown as Timestamp).toDate().getTime() : Date.now() 
+          })) : [],
+        };
+        setGameState(processedData);
+
       } else {
         setGameState(null);
-        // Only toast if it wasn't an intentional leave/delete action
-        // This might require more sophisticated logic if we want to differentiate
-        toast({ title: "Game not found", description: "This game session may have ended or does not exist.", variant: "destructive"});
+        // Consider if toast is needed here, could be annoying if game ends normally
+        // toast({ title: "Game not found", description: "This game session may have ended or does not exist.", variant: "destructive"});
       }
       setIsLoading(false);
     }, (error) => {
@@ -109,15 +113,14 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       role: "Communicator", // Placeholder, will be reassigned at game start
       isHost: true,
       isAlive: true,
-      hasCalledMeeting: false, // Explicitly set
-      clue: null, // Explicitly set optional 'clue' to null
+      hasCalledMeeting: false,
+      clue: null, // Explicitly null
     };
     const newGame = initialGameState(newGameId, hostPlayer);
     
     try {
       const gameDocRef = doc(db, "games", newGameId);
       await setDoc(gameDocRef, newGame);
-      // No need to set gameState locally here, onSnapshot will handle it
       return newGameId;
     } catch (error) {
       console.error("Error creating game:", error);
@@ -143,7 +146,6 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
 
         const currentGameData = gameSnap.data() as GameState;
         if (currentGameData.players.find(p => p.id === localPlayerId)) {
-          // Already in lobby or game
           return true;
         }
         if (currentGameData.players.length >= 5) {
@@ -158,10 +160,10 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         const joiningPlayer: Player = {
           id: localPlayerId,
           name: username,
-          role: "Communicator", // Placeholder, assigned at game start
-          isHost: false, // Explicitly false for joining players
+          role: "Communicator",
+          isHost: false,
           isAlive: true,
-          hasCalledMeeting: false, // Explicitly false
+          hasCalledMeeting: false,
           clue: null, // Explicitly null
         };
         transaction.update(gameDocRef, {
@@ -183,7 +185,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       toast({ title: "Not Host", description: "Only the host can start the game.", variant: "destructive" });
       return;
     }
-    if (gameState.players.length !== 5) { // MAX_PLAYERS is 5
+    if (gameState.players.length !== 5) {
       toast({ title: "Not Enough Players", description: `Need 5 players to start. Currently ${gameState.players.length}.`, variant: "destructive" });
       return;
     }
@@ -192,7 +194,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       return;
     }
 
-    setIsLoading(true); // Show loading indicator while AI runs
+    setIsLoading(true);
     try {
       toast({ title: "Starting Game...", description: "The AI is generating words and clues. This may take a moment." });
       const aiData = await generateWordsAndClues({ numberOfWords: 9 }); 
@@ -207,19 +209,21 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       const gameDocRef = doc(db, "games", gameState.gameId);
       await updateDoc(gameDocRef, {
         status: 'role-reveal',
-        words: gameWords,
-        targetWord: aiData.targetWord,
-        players: updatedPlayers,
+        words: gameWords, // Array of GameWord objects
+        targetWord: aiData.targetWord, // string
+        players: updatedPlayers, // Array of Player objects, ensuring clue is null if not applicable
         gameLog: arrayUnion(`Game started by ${gameState.players.find(p=>p.isHost)?.name}. Roles assigned, words on the board!`),
-        chatMessages: [], // Reset chat messages
-        accusationsMadeByImposters: 0,
-        meetingsCalled: 0,
+        chatMessages: [], // Ensure it's an empty array
+        accusationsMadeByImposters: 0, // number
+        meetingsCalled: 0, // number
+        // maxMeetings is already defined in initialGameState, no need to update unless changing
+        // winner is already null, no need to update unless game ends
       });
-      // setIsLoading(false) will be handled by onSnapshot updating gameState
+      // setIsLoading(false) will be handled by onSnapshot
     } catch (error) {
       console.error("Failed to start game with AI:", error);
       toast({ title: "Error Starting Game", description: (error as Error).message || "The AI encountered an issue. Please try again.", variant: "destructive" });
-      setIsLoading(false); // Ensure loading is stopped on error
+      setIsLoading(false);
     }
   };
   
@@ -237,7 +241,6 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
             gameLog: arrayUnion(`Game status changed to ${action.payload}.`)
           });
           break;
-        // Other specific actions are now their own functions for clarity
         default:
           console.warn("Unhandled action type in dispatch:", action.type);
           toast({ title: "Unknown Action", description: `Action ${action.type} is not recognized.`, variant: "destructive" });
@@ -259,7 +262,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       toast({title: "Error", description: "Player not found in game.", variant: "destructive"});
       return;
     }
-    if (localPlayer.role === 'Communicator' && gameState.status === 'playing') { // Communicators can chat during meetings perhaps? For now, disable in 'playing'
+    if (localPlayer.role === 'Communicator' && gameState.status === 'playing') {
       toast({title: "Communicators Observe", description: "As a Communicator, you cannot send messages during normal play.", variant: "default"});
       return;
     }
@@ -269,7 +272,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       playerId: localPlayer.id,
       playerName: localPlayer.name,
       text: text,
-      timestamp: serverTimestamp() as Timestamp, // Use server timestamp
+      timestamp: serverTimestamp() as Timestamp, 
     };
     const gameDocRef = doc(db, "games", gameState.gameId);
     try {
@@ -303,11 +306,10 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
        toast({title: "Accusation Limit Reached", description: "Your Imposter team has already made its one accusation.", variant: "destructive"});
        return;
     }
-    if (gameState.status !== 'meeting' && gameState.status !== 'accusation') { // Allow accusation during meeting or dedicated phase
-        toast({title: "Invalid Timing", description: "Accusations can only be made during a meeting.", variant: "default"});
+    if (gameState.status !== 'meeting' && gameState.status !== 'accusation') {
+        toast({title: "Invalid Timing", description: "Accusations can only be made during a meeting or accusation phase.", variant: "default"});
         return;
     }
-
 
     let winner: GameState['winner'] = null;
     let logMessage = `${accuser.name} (Imposter) accused ${accusedPlayer.name} of being the Helper.`;
@@ -344,30 +346,29 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       await runTransaction(db, async (transaction) => {
         const gameSnap = await transaction.get(gameDocRef);
         if (!gameSnap.exists()) {
-          // Game might have been deleted by another leaving player, which is fine.
           console.log("Attempted to leave a game that no longer exists.");
           return; 
         }
         
-        const currentPlayers = gameSnap.data().players as Player[];
+        const currentData = gameSnap.data() as GameState;
+        const currentPlayers = currentData.players;
         const playerToRemove = currentPlayers.find(p => p.id === localPlayerId);
 
         if (playerToRemove) {
           const updatedPlayers = currentPlayers.filter(p => p.id !== localPlayerId);
 
           if (updatedPlayers.length === 0) {
-            // If last player leaves, delete the game document
             transaction.delete(gameDocRef);
-            toast({ title: "Game Ended", description: "The last player left, so the game has been removed." });
+            // toast({ title: "Game Ended", description: "The last player left, so the game has been removed." });
           } else {
-            let newHostId = gameSnap.data().hostId;
+            let newHostId = currentData.hostId;
             let newPlayersArray = updatedPlayers;
             let logMsg = `${playerToRemove.name} left the game.`;
 
             if (playerToRemove.isHost && updatedPlayers.length > 0) {
               newHostId = updatedPlayers[0].id; 
               newPlayersArray = updatedPlayers.map((p, idx) => 
-                idx === 0 ? { ...p, isHost: true } : { ...p, isHost: false } // Ensure only one host
+                idx === 0 ? { ...p, isHost: true } : { ...p, isHost: false }
               );
               logMsg = `${playerToRemove.name} (Host) left. ${updatedPlayers[0].name} is the new host.`;
             }
@@ -379,8 +380,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           }
         }
       });
-      setGameState(null); // Clear local state immediately
-      // Navigation will be handled by the page component based on GameState being null
+      setGameState(null); 
     } catch (error) {
       console.error("Error leaving game:", error);
       const firebaseError = error as { code?: string; message: string };
@@ -407,7 +407,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       toast({ title: "Meeting Limit Reached", description: "No more emergency meetings can be called this game.", variant: "default" });
       return;
     }
-    if (gameState.status !== 'playing') { // Meetings can only be called during 'playing'
+    if (gameState.status !== 'playing') {
       toast({ title: "Invalid Time for Meeting", description: "Meetings can only be called during active gameplay.", variant: "default" });
       return;
     }
@@ -416,7 +416,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     const updatedPlayers = gameState.players.map(p => p.id === localPlayerId ? {...p, hasCalledMeeting: true} : p);
     try {
       await updateDoc(gameDocRef, {
-        status: 'meeting', // Change status to meeting
+        status: 'meeting',
         meetingsCalled: increment(1),
         players: updatedPlayers,
         gameLog: arrayUnion(`${player.name} called an emergency meeting! Imposters, this is your chance to accuse the Helper.`)
@@ -459,8 +459,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     leaveGame,
     callMeeting,
     updatePlayerInContext,
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [gameState, localPlayerId, isLoading, isInitialized, toast]); // useCallback for functions if they cause re-renders
+  }), [gameState, localPlayerId, isLoading, isInitialized, toast, createGame, joinGame, startGameAI, dispatch, sendChatMessage, accuseHelper, leaveGame, callMeeting, updatePlayerInContext]);
 
   return (
     <GameContext.Provider value={contextValue}>
@@ -476,4 +475,3 @@ export const useGame = () => {
   }
   return context;
 };
-
