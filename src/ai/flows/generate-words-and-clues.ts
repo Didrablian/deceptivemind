@@ -23,7 +23,7 @@ export type GenerateWordsAndCluesInput = z.infer<typeof GenerateWordsAndCluesInp
 
 const GenerateWordsAndCluesOutputSchema = z.object({
   targetWord: z.string().describe('The selected target word. This word should be simple and commonly known (e.g., "NASA", "apple", "car").'),
-  words: z.array(z.string()).describe('The list of generated words. All words should be simple, commonly known, and distinct from each other (e.g., "sun", "book", "Elon Musk").'),
+  words: z.array(z.string()).describe('The list of generated words. All words should be simple, commonly known, and distinct from each other (e.g., "sun", "book", "Elon Musk"). Each word should be a single common noun, proper noun, or a very short common phrase (max 2 words like "ice cream"). Avoid full sentences or questions.'),
   helperClue: z.string().describe('A simple, indirect clue for the helper, related to the target word. Avoid jargon. Think of concepts like "space travel" for "NASA", or "electric cars" for "Elon Musk". Ensure this clue is distinct from the clue holder clue.'),
   clueHolderClue: z
     .string()
@@ -39,17 +39,18 @@ const generateWordsAndCluesPrompt = ai.definePrompt({
   name: 'generateWordsAndCluesPrompt',
   input: {schema: GenerateWordsAndCluesInputSchema},
   output: {schema: GenerateWordsAndCluesOutputSchema},
-  prompt: `Generate {{numberOfWords}} distinct and unrelated words. These words should be simple, common, and easily understandable by a general audience (e.g., 'apple', 'car', 'sun', 'book', 'NASA', 'coffee', 'ocean'). Generate a fresh and diverse set of words each time.
-Select one of these words as the target word.
-Create an indirect clue related to the target word for the helper. The clue should be simple and avoid jargon. For example, if the target word is 'NASA', a clue could be 'related to rockets and space exploration'. If the target is 'Musk', a clue could be 'associated with electric vehicles and space'.
-Create another indirect clue, different from the helper's, related to the target word, for the clue holder. This clue should also be simple and avoid jargon.
+  prompt: `You are an assistant that generates words and clues for a social deduction game.
+Your task is to:
+1. Generate exactly {{numberOfWords}} distinct and unrelated words.
+   - These words MUST be simple, common, and easily understandable by a general audience (e.g., 'apple', 'car', 'sun', 'book', 'NASA', 'coffee', 'ocean', 'dog', 'house').
+   - Each word should be a single common noun, proper noun, or a very short common phrase (max 2 words, e.g., "ice cream"). Avoid sentences, questions, or complex descriptions for the words themselves.
+   - Ensure the words are fresh and diverse. Do not repeat words from previous requests if possible.
+2. Select one of these generated words as the 'targetWord'. This target word should also be simple and commonly known from the list you just generated.
+3. Create an indirect clue for a 'helper'. This clue should be related to the 'targetWord', simple, avoid jargon, and not directly give away the targetWord. (e.g., if targetWord is 'NASA', clue could be 'related to rockets and space exploration').
+4. Create another indirect clue for a 'clueHolder', different from the helper's clue. This clue should also be related to the 'targetWord', simple, avoid jargon, and distinct from the helper's clue.
 
-Make sure the helper clue and clue holder clue are substantially different and offer unique perspectives if possible.
-
-Words: {{words}}
-Target Word: {{targetWord}}
-Helper Clue: {{helperClue}}
-Clue Holder Clue: {{clueHolderClue}}`,
+Respond STRICTLY with a JSON object matching the output schema.
+`,
 });
 
 const generateWordsAndCluesFlow = ai.defineFlow(
@@ -58,49 +59,74 @@ const generateWordsAndCluesFlow = ai.defineFlow(
     inputSchema: GenerateWordsAndCluesInputSchema,
     outputSchema: GenerateWordsAndCluesOutputSchema,
   },
-  async input => {
-    const numberOfWords = input.numberOfWords ?? 9;
+  async (input: GenerateWordsAndCluesInput) => {
+    const {output} = await generateWordsAndCluesPrompt(input);
 
-    // Generate words using LLM
-    const {text} = await ai.generate({
-      prompt: `Generate ${numberOfWords} distinct and unrelated words. The words should be simple, common, and easily understandable by a general audience (e.g., 'house', 'tree', 'water', 'friend', 'moon', 'company', 'inventor'). Generate a fresh and diverse set of words each time. Return them as a comma separated list.`,
-    });
-    const words = text!.split(',').map(word => word.trim());
-
-    // Select target word - for now just pick the first one generated if AI doesn't specify in structured output later
-    const targetWord = words.length > 0 ? words[0] : "default_target"; // Fallback if words list is empty
-
-    const {output} = await generateWordsAndCluesPrompt({
-      ...input,
-      words, // Pass the generated words to the main prompt
-      targetWord, // Pass an initial target, it might be refined by the prompt
-      helperClue: '', // These will be populated by the prompt, but need to exist.
-      clueHolderClue: '', // These will be populated by the prompt, but need to exist.
-    });
-
-    // Ensure the output has the target word from the list (or the one LLM picked)
-    // And ensure the words list in the output matches the generated/selected ones
-    if (output) {
-        if (!output.words || output.words.length === 0 || !output.words.includes(output.targetWord)){
-            // If AI output is problematic with words/target, try to fix it.
-            output.words = words;
-            if (words.length > 0 && !words.includes(output.targetWord)) {
-                output.targetWord = words[0]; // Fallback if AI's targetWord is weird or not in its own list
-            } else if (words.length === 0 && output.targetWord === "default_target") {
-                 output.targetWord = "ErrorWord"; // Indicate a problem if no words were generated
-            }
-        }
-    } else {
-        // If the entire output is null, this is a bigger issue.
-        // For now, we'll return a structured error or default, but ideally, this would be handled by retries or alerts.
-        return {
-            targetWord: "Error - No AI Output",
-            words: words.length > 0 ? words : ["Error"],
-            helperClue: "Error - No AI Output",
-            clueHolderClue: "Error - No AI Output",
-        };
+    if (!output || !output.words || !output.targetWord) {
+      console.error("AI output missing crucial fields:", output);
+      // Attempt to provide a fallback or throw a more specific error
+      const fallbackWords = ["apple", "banana", "cherry", "date", "elderberry", "fig", "grape", "honeydew", "kiwi"];
+      const fallbackTarget = fallbackWords[Math.floor(Math.random() * fallbackWords.length)];
+      return {
+          words: fallbackWords,
+          targetWord: fallbackTarget,
+          helperClue: `A common fruit, often ${fallbackTarget === 'apple' ? 'red or green' : 'yellow and curved'}.`,
+          clueHolderClue: `Think about what monkeys like, or what keeps the doctor away.`,
+      };
+      // Or throw new Error('AI failed to generate complete words and clues structure.');
     }
 
-    return output!;
+    // Cleanup individual words and the target word
+    const cleanedWords = output.words.map(word =>
+      word
+        .trim()
+        .replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '') // Remove leading/trailing unwanted chars but keep spaces, hyphens, apostrophes internally
+        .replace(/\s+/g, ' ') // Normalize multiple spaces to one
+    ).filter(word => word.length > 1 && word.length < 30 && !word.includes('\n') && word.split(' ').length <= 3); // Sanity filter: length, no newlines, max 3 "sub-words"
+
+    let finalTargetWord = output.targetWord
+        .trim()
+        .replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '')
+        .replace(/\s+/g, ' ');
+
+    if (cleanedWords.length === 0) {
+        console.error("AI generated an empty or invalid list of words after cleaning.");
+         const fallbackWords = ["cat", "dog", "sun", "moon", "star", "tree", "house", "car", "book"];
+         finalTargetWord = fallbackWords[Math.floor(Math.random() * fallbackWords.length)];
+         return {
+             words: fallbackWords,
+             targetWord: finalTargetWord,
+             helperClue: "A common household pet.",
+             clueHolderClue: "Man's best friend or a feline companion.",
+         };
+        // Or throw new Error('AI generated an empty or invalid list of words after cleaning.');
+    }
+    
+    // Ensure targetWord is valid and from the cleaned list
+    const targetExistsInCleaned = cleanedWords.some(w => w.toLowerCase() === finalTargetWord.toLowerCase());
+    if (!targetExistsInCleaned) {
+        console.warn(`AI's targetWord "${output.targetWord}" (cleaned: "${finalTargetWord}") was not in its generated cleaned word list or was invalid. Falling back to the first cleaned word.`);
+        finalTargetWord = cleanedWords[0]; // Fallback
+    } else {
+        // Ensure consistent casing if a match was found
+        finalTargetWord = cleanedWords.find(w => w.toLowerCase() === finalTargetWord.toLowerCase()) || finalTargetWord;
+    }
+    
+    // Ensure we have the correct number of words, supplementing if necessary after cleaning
+    let finalWords = [...cleanedWords];
+    if (finalWords.length < (input.numberOfWords || 9)) {
+        console.warn(`AI generated only ${finalWords.length} valid words after cleaning. Attempting to supplement.`);
+        const needed = (input.numberOfWords || 9) - finalWords.length;
+        const supplement = ["cloud", "river", "mountain", "pencil", "phone", "game", "music", "light", "dream"].slice(0, needed);
+        finalWords.push(...supplement.filter(s => !finalWords.includes(s)));
+    }
+    finalWords = finalWords.slice(0, (input.numberOfWords || 9));
+
+
+    return {
+      ...output,
+      words: finalWords,
+      targetWord: finalTargetWord,
+    };
   }
 );
