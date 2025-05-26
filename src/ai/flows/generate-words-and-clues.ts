@@ -59,12 +59,19 @@ const generateWordsAndCluesFlow = ai.defineFlow(
     inputSchema: GenerateWordsAndCluesInputSchema,
     outputSchema: GenerateWordsAndCluesOutputSchema,
   },
-  async (input: GenerateWordsAndCluesInput) => {
-    const {output} = await generateWordsAndCluesPrompt(input);
+  async (input: GenerateWordsAndCluesInput): Promise<GenerateWordsAndCluesOutput> => {
+    let aiCallOutput: GenerateWordsAndCluesOutput | null = null;
 
-    if (!output || !output.words || !output.targetWord) {
-      console.error("AI output missing crucial fields:", output);
-      // Attempt to provide a fallback or throw a more specific error
+    try {
+      const result = await generateWordsAndCluesPrompt(input);
+      aiCallOutput = result.output;
+    } catch (e) {
+      console.error("Error calling generateWordsAndCluesPrompt or parsing its output:", e);
+      // aiCallOutput remains null, will trigger the fallback logic below
+    }
+
+    if (!aiCallOutput || !aiCallOutput.words || !aiCallOutput.targetWord || !aiCallOutput.helperClue || !aiCallOutput.clueHolderClue) {
+      console.warn("AI output missing crucial fields or AI call failed. Using fallback.", aiCallOutput);
       const fallbackWords = ["apple", "banana", "cherry", "date", "elderberry", "fig", "grape", "honeydew", "kiwi"];
       const fallbackTarget = fallbackWords[Math.floor(Math.random() * fallbackWords.length)];
       return {
@@ -73,24 +80,23 @@ const generateWordsAndCluesFlow = ai.defineFlow(
           helperClue: `A common fruit, often ${fallbackTarget === 'apple' ? 'red or green' : 'yellow and curved'}.`,
           clueHolderClue: `Think about what monkeys like, or what keeps the doctor away.`,
       };
-      // Or throw new Error('AI failed to generate complete words and clues structure.');
     }
 
-    // Cleanup individual words and the target word
-    const cleanedWords = output.words.map(word =>
+    // Cleanup individual words and the target word from aiCallOutput
+    const cleanedWords = aiCallOutput.words.map(word =>
       word
         .trim()
         .replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '') // Remove leading/trailing unwanted chars but keep spaces, hyphens, apostrophes internally
         .replace(/\s+/g, ' ') // Normalize multiple spaces to one
     ).filter(word => word.length > 1 && word.length < 30 && !word.includes('\n') && word.split(' ').length <= 3); // Sanity filter: length, no newlines, max 3 "sub-words"
 
-    let finalTargetWord = output.targetWord
+    let finalTargetWord = aiCallOutput.targetWord
         .trim()
         .replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '')
         .replace(/\s+/g, ' ');
 
     if (cleanedWords.length === 0) {
-        console.error("AI generated an empty or invalid list of words after cleaning.");
+        console.error("AI generated an empty or invalid list of words after cleaning. Using secondary fallback.");
          const fallbackWords = ["cat", "dog", "sun", "moon", "star", "tree", "house", "car", "book"];
          finalTargetWord = fallbackWords[Math.floor(Math.random() * fallbackWords.length)];
          return {
@@ -99,34 +105,47 @@ const generateWordsAndCluesFlow = ai.defineFlow(
              helperClue: "A common household pet.",
              clueHolderClue: "Man's best friend or a feline companion.",
          };
-        // Or throw new Error('AI generated an empty or invalid list of words after cleaning.');
     }
     
     // Ensure targetWord is valid and from the cleaned list
     const targetExistsInCleaned = cleanedWords.some(w => w.toLowerCase() === finalTargetWord.toLowerCase());
-    if (!targetExistsInCleaned) {
-        console.warn(`AI's targetWord "${output.targetWord}" (cleaned: "${finalTargetWord}") was not in its generated cleaned word list or was invalid. Falling back to the first cleaned word.`);
-        finalTargetWord = cleanedWords[0]; // Fallback
+    if (!targetExistsInCleaned || finalTargetWord.length < 1 || finalTargetWord.length > 30) {
+        console.warn(`AI's targetWord "${aiCallOutput.targetWord}" (cleaned: "${finalTargetWord}") was not in its generated cleaned word list or was invalid. Falling back to the first cleaned word.`);
+        finalTargetWord = cleanedWords[0]; 
     } else {
         // Ensure consistent casing if a match was found
         finalTargetWord = cleanedWords.find(w => w.toLowerCase() === finalTargetWord.toLowerCase()) || finalTargetWord;
     }
     
     // Ensure we have the correct number of words, supplementing if necessary after cleaning
-    let finalWords = [...cleanedWords];
+    let finalWords = [...new Set(cleanedWords.filter(w => w.length > 0))]; // Ensure uniqueness and non-empty
+    
     if (finalWords.length < (input.numberOfWords || 9)) {
         console.warn(`AI generated only ${finalWords.length} valid words after cleaning. Attempting to supplement.`);
         const needed = (input.numberOfWords || 9) - finalWords.length;
-        const supplement = ["cloud", "river", "mountain", "pencil", "phone", "game", "music", "light", "dream"].slice(0, needed);
-        finalWords.push(...supplement.filter(s => !finalWords.includes(s)));
+        // Ensure supplement words are distinct from existing finalWords
+        const baseSupplement = ["cloud", "river", "mountain", "pencil", "phone", "game", "music", "light", "dream", "flower", "ocean", "star", "planet", "coffee", "tea"];
+        const supplementToAdd = baseSupplement.filter(s => !finalWords.some(fw => fw.toLowerCase() === s.toLowerCase())).slice(0, needed);
+        finalWords.push(...supplementToAdd);
     }
+    // Ensure final list is exactly the required number, and target word is in it
     finalWords = finalWords.slice(0, (input.numberOfWords || 9));
+    if (!finalWords.some(w => w.toLowerCase() === finalTargetWord.toLowerCase())) {
+        if (finalWords.length > 0) {
+            console.warn(`Target word "${finalTargetWord}" was not in the final list after supplementation. Replacing a word.`);
+            finalWords[finalWords.length -1] = finalTargetWord; // Replace last word to ensure target is present
+        } else { // Should be extremely rare, means all fallbacks failed
+             console.error("Catastrophic failure in word generation, returning absolute minimum fallback.");
+             finalWords = [finalTargetWord, "backup1", "backup2", "backup3", "backup4", "backup5", "backup6", "backup7", "backup8"].slice(0,9);
+        }
+    }
 
 
     return {
-      ...output,
       words: finalWords,
       targetWord: finalTargetWord,
+      helperClue: aiCallOutput.helperClue, // Use clues from original successful AI output
+      clueHolderClue: aiCallOutput.clueHolderClue,
     };
   }
 );
