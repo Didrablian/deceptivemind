@@ -9,6 +9,8 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Award, Users, ShieldCheck, ShieldX, Eye, UserCheck, UserX, Info, MessageSquare, ShieldQuestion, RotateCcw, TrendingUp } from 'lucide-react';
+import { useGame } from '@/context/GameContext'; // Import useGame
+import { useToast } from '@/hooks/use-toast'; // Import useToast
 
 interface GameOverScreenProps {
   winner?: GameState['winner'];
@@ -16,6 +18,8 @@ interface GameOverScreenProps {
   gameLog: string[];
   localPlayer: Player;
   players: Player[];
+  gameId: string; // Pass gameId
+  isHost: boolean; // Pass isHost
 }
 
 const RoleIconMini: React.FC<{ role: Player['role'] }> = ({ role }) => {
@@ -28,8 +32,10 @@ const RoleIconMini: React.FC<{ role: Player['role'] }> = ({ role }) => {
   }
 };
 
-export default function GameOverScreen({ winner, winningReason, gameLog, localPlayer, players }: GameOverScreenProps) {
+export default function GameOverScreen({ winner, winningReason, gameLog, localPlayer, players, gameId, isHost }: GameOverScreenProps) {
   const router = useRouter();
+  const { startNewRound, leaveGame } = useGame(); // Get startNewRound from context
+  const { toast } = useToast();
 
   let titleText = "Game Over!";
   let descriptionText = winningReason || "The session has concluded.";
@@ -38,19 +44,31 @@ export default function GameOverScreen({ winner, winningReason, gameLog, localPl
   if (winner === 'Imposters') {
     titleText = "Imposters Win!";
     titleIcon = <ShieldX className="w-12 h-12 text-destructive" />;
-  } else if (winner === 'Team' || winner === 'GoodTeam') { // GoodTeam is legacy, use Team
+  } else if (winner === 'Team' || winner === 'GoodTeam') {
     titleText = "Team Wins!";
     titleIcon = <ShieldCheck className="w-12 h-12 text-green-500" />;
-  } else if (winner === 'NoOne') { // This case might be less frequent with new rules
+  } else if (winner === 'NoOne') {
     titleText = "Stalemate!";
      titleIcon = <Users className="w-12 h-12 text-muted-foreground" />;
   }
 
-  const handlePlayAgain = () => {
-    // For Firestore, a new game creation is needed. Redirect to home.
-    // No local storage to clear specific to game state like before.
-    // Player ID and username are kept in local storage for convenience.
-    router.push('/');
+  const handlePlayAgain = async () => {
+    if (!isHost) {
+        toast({title: "Only Host", description: "Only the host can start a new round.", variant: "default"});
+        return;
+    }
+    try {
+      await startNewRound();
+      // Game state will update via context, causing a re-render to the role-reveal or game screen
+    } catch (error) {
+      toast({title: "Error Starting New Round", description: (error as Error).message, variant: "destructive"});
+    }
+  };
+
+  const handleLeaveGame = async () => {
+    await leaveGame();
+    router.push('/'); // Navigate to homepage after leaving
+    toast({ title: "Left Game" });
   };
 
   return (
@@ -92,9 +110,19 @@ export default function GameOverScreen({ winner, winningReason, gameLog, localPl
             </ScrollArea>
           </div>
         </CardContent>
-        <CardFooter>
-          <Button onClick={handlePlayAgain} className="w-full text-lg py-3 bg-primary hover:bg-primary/80 text-primary-foreground">
-            <RotateCcw className="mr-2 h-5 w-5" /> Play Again
+        <CardFooter className="flex flex-col sm:flex-row gap-2">
+          {isHost && (
+            <Button onClick={handlePlayAgain} className="w-full text-lg py-3 bg-primary hover:bg-primary/80 text-primary-foreground">
+                <RotateCcw className="mr-2 h-5 w-5" /> Play Again (Host)
+            </Button>
+          )}
+          {!isHost && (
+             <Button onClick={handlePlayAgain} className="w-full text-lg py-3 bg-primary hover:bg-primary/80 text-primary-foreground" disabled>
+                <RotateCcw className="mr-2 h-5 w-5" /> Waiting for Host to Start New Round
+            </Button>
+          )}
+          <Button onClick={handleLeaveGame} variant="outline" className="w-full text-lg py-3">
+             Leave Game
           </Button>
         </CardFooter>
       </Card>
