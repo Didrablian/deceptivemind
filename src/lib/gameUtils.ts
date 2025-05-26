@@ -89,7 +89,8 @@ export const initialGameState = (gameId: string, hostPlayer: Player): GameState 
   accusationsMadeByImposters: 0,
   meetingsCalled: 0,
   maxMeetings: 1, // Max meetings per game (or per Imposter team combined)
-  winner: undefined, // Explicitly undefined
+  winner: null, // Use null instead of undefined for Firestore compatibility
   gameLog: [`Game ${gameId} created by ${hostPlayer.name}.`],
   chatMessages: [], // Initialize as empty array
 });
+

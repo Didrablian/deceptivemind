@@ -34,7 +34,7 @@ export interface GameState {
   accusationsMadeByImposters: number;
   meetingsCalled: number;
   maxMeetings: number;
-  winner?: "Imposters" | "GoodTeam" | "NoOne";
+  winner: "Imposters" | "GoodTeam" | "NoOne" | null; // Changed to explicitly include null
   gameLog: string[]; // Array of log messages
   chatMessages: ChatMessage[]; // Array of chat messages
 }
@@ -55,3 +55,4 @@ export interface AIWordsAndClues {
   helperClue: string;
   clueHolderClue: string;
 }
+
