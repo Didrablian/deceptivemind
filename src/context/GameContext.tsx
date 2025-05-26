@@ -3,10 +3,10 @@
 
 import type { ReactNode } from 'react';
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
-import { doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, arrayRemove, increment, runTransaction, deleteDoc, Timestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, increment, runTransaction, Timestamp, deleteDoc, FieldValue } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type { GameState, Player, GameWord, ChatMessage, Role, GameStatus } from '@/lib/types';
-import { initialGameState, generateShortId, assignRolesAndClues, calculateScores } from '@/lib/gameUtils';
+import { initialGameState, generateShortId, assignRolesAndClues, calculateScores, shuffleArray } from '@/lib/gameUtils';
 import { generateWordsAndClues } from '@/ai/flows/generate-words-and-clues';
 import { useToast } from '@/hooks/use-toast';
 
@@ -25,7 +25,7 @@ interface GameContextProps {
   lockInWord: (wordText: string) => Promise<void>;
   imposterAccuseHelperInTwist: (accusedPlayerId: string) => Promise<void>;
   acknowledgeRole: () => Promise<void>;
-  updatePlayerInContext: (playerData: Partial<Player> & { id: string }) => Promise<void>; 
+  updatePlayerInContext: (playerData: Partial<Player> & { id: string }) => Promise<void>;
   startNewRound: () => Promise<void>;
 }
 
@@ -34,7 +34,7 @@ const GameContext = createContext<GameContextProps | undefined>(undefined);
 export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNode, gameIdFromParams?: string }) => {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [localPlayerId, setLocalPlayerIdState] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true); 
+  const [isLoading, setIsLoading] = useState(true);
   const [isInitialized, setIsInitialized] = useState(false);
   const { toast } = useToast();
 
@@ -48,23 +48,23 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         localStorage.setItem('dm_localPlayerId', newPlayerId);
         setLocalPlayerIdState(newPlayerId);
       }
-      setIsInitialized(true); 
+      setIsInitialized(true);
     }
   }, []);
 
   useEffect(() => {
-    if (!isInitialized) { 
-      setIsLoading(true); 
+    if (!isInitialized) {
+      setIsLoading(true);
       return;
     }
 
     if (!gameIdFromParams) {
       setGameState(null);
-      setIsLoading(false); 
+      setIsLoading(false);
       return;
     }
-    
-    setIsLoading(true); 
+
+    setIsLoading(true);
     const gameDocRef = doc(db, "games", gameIdFromParams);
     const unsubscribe = onSnapshot(gameDocRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -78,33 +78,35 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
             } else if (msg.timestamp && (msg.timestamp as unknown as Timestamp)?.toDate) {
               processedTimestamp = (msg.timestamp as unknown as Timestamp).toDate().getTime();
             } else {
-              processedTimestamp = Date.now(); 
+              processedTimestamp = Date.now();
             }
             return {...msg, timestamp: processedTimestamp };
           }).sort((a,b) => a.timestamp - b.timestamp) : [],
           players: data.players ? data.players.map(p => ({
-            ...p, 
-            score: p.score || 0, 
+            ...p,
+            score: p.score || 0,
             isHost: p.isHost === undefined ? (p.id === data.hostId) : p.isHost,
-            isRevealedImposter: p.isRevealedImposter || false, 
+            isRevealedImposter: p.isRevealedImposter || false,
             clue: p.clue === undefined ? null : p.clue,
             isAlive: p.isAlive === undefined ? true : p.isAlive,
           })) : [],
           targetWord: data.targetWord || "",
           eliminationCount: data.eliminationCount || 0,
           maxEliminations: data.maxEliminations || 3,
-          minPlayers: data.minPlayers || 4,
-          maxPlayers: data.maxPlayers || 8,
+          minPlayers: data.minPlayers || 4, // Default to 4 if not set
+          maxPlayers: data.maxPlayers || 8, // Default to 8 if not set
           actualPlayerCount: data.actualPlayerCount === undefined ? (data.players?.length || 0) : data.actualPlayerCount,
           lockedInWordGuess: data.lockedInWordGuess === undefined ? null : data.lockedInWordGuess,
           winner: data.winner === undefined ? null : data.winner,
           winningReason: data.winningReason === undefined ? "" : data.winningReason,
           gameLog: data.gameLog || [],
           words: data.words || [],
+          playerScoresBeforeRound: data.playerScoresBeforeRound || {},
         };
         setGameState(processedData);
       } else {
         setGameState(null);
+        toast({ title: "Game Ended", description: "This game session no longer exists.", variant: "default"});
       }
       setIsLoading(false);
     }, (error) => {
@@ -138,14 +140,15 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     const hostPlayer: Player = {
       id: localPlayerId,
       name: username,
-      role: "Communicator", 
+      role: "ClueHolder", // Will be reassigned on game start
       isHost: true,
       isAlive: true,
-      clue: null, 
+      clue: null,
       score: 0,
       isRevealedImposter: false,
     };
     const newGame = initialGameState(newGameId, hostPlayer);
+    newGame.playerScoresBeforeRound = { [hostPlayer.id]: 0 };
 
     try {
       const gameDocRef = doc(db, "games", newGameId);
@@ -174,7 +177,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
 
         const currentGameData = gameSnap.data() as GameState;
         if (currentGameData.players.find(p => p.id === localPlayerId)) {
-          return true; 
+          return true;
         }
         if (currentGameData.players.length >= currentGameData.maxPlayers) {
           toast({ title: "Lobby Full", description: `This game lobby is full (${currentGameData.maxPlayers} players max).`, variant: "destructive" });
@@ -188,17 +191,24 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         const joiningPlayer: Player = {
           id: localPlayerId,
           name: username,
-          role: "ClueHolder", 
+          role: "ClueHolder", // Will be reassigned on game start
           isHost: false,
           isAlive: true,
-          clue: null, 
+          clue: null,
           score: 0,
           isRevealedImposter: false,
         };
+
+        const updatedPlayerScoresBeforeRound = {
+            ...(currentGameData.playerScoresBeforeRound || {}),
+            [localPlayerId]: 0
+        };
+
         transaction.update(gameDocRef, {
           players: arrayUnion(joiningPlayer),
           actualPlayerCount: increment(1),
-          gameLog: arrayUnion(`${username} joined the lobby.`)
+          gameLog: arrayUnion(`${username} joined the lobby.`),
+          playerScoresBeforeRound: updatedPlayerScoresBeforeRound
         });
         return true;
       });
@@ -227,29 +237,36 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       if (!aiData || !aiData.words || aiData.words.length === 0 || !aiData.targetWord || !aiData.helperClue || !aiData.clueHolderClue) {
         throw new Error("Failed to generate complete game data. Please try starting again.");
       }
-      
-      const shuffledPlayersForAssignment = [...gameState.players].sort(() => Math.random() - 0.5);
+
+      // Snapshot scores before the first round (all should be 0 for a new game)
+      const scoresSnapshot = gameState.players.reduce((acc, p) => {
+        acc[p.id] = p.score || 0;
+        return acc;
+      }, {} as Record<string, number>);
+
+      const shuffledPlayersForAssignment = shuffleArray([...gameState.players]);
       const { updatedPlayers, gameWords } = assignRolesAndClues(shuffledPlayersForAssignment, aiData, gameState.minPlayers, gameState.maxPlayers);
 
       const gameDocRef = doc(db, "games", gameState.gameId);
       await updateDoc(gameDocRef, {
         status: 'role-reveal' as GameStatus,
-        words: gameWords, 
+        words: gameWords,
         targetWord: aiData.targetWord,
-        players: updatedPlayers, 
+        players: updatedPlayers,
         gameLog: arrayUnion(`Game started by ${gameState.players.find(p=>p.id === gameState.hostId)?.name}. Roles assigned!`),
-        chatMessages: [], 
+        chatMessages: [],
         eliminationCount: 0,
         lockedInWordGuess: null,
         winner: null,
         winningReason: "",
-        actualPlayerCount: gameState.players.length, 
+        actualPlayerCount: gameState.players.length,
+        playerScoresBeforeRound: scoresSnapshot,
       });
     } catch (error) {
       console.error("Failed to start game:", error);
       toast({ title: "Error Starting Game", description: (error as Error).message, variant: "destructive" });
     } finally {
-        setIsLoading(false); 
+        setIsLoading(false);
     }
   };
 
@@ -274,7 +291,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       playerId: localPlayer.id,
       playerName: localPlayer.name,
       text: text,
-      timestamp: Date.now(), 
+      timestamp: Date.now(), // Use client-side timestamp
     };
     const gameDocRef = doc(db, "games", gameState.gameId);
     try {
@@ -292,7 +309,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       toast({ title: "Invalid Action", description: "Only the Communicator can eliminate words.", variant: "destructive" });
       return;
     }
-    if (gameState.status !== 'discussion' && gameState.status !== 'word-elimination') { 
+    if (gameState.status !== 'discussion' && gameState.status !== 'word-elimination') {
         toast({ title: "Invalid Action", description: "Words can only be eliminated during discussion phase.", variant: "destructive" });
         return;
     }
@@ -307,7 +324,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         const freshGameSnap = await transaction.get(gameDocRef);
         if (!freshGameSnap.exists()) throw new Error("Game not found");
         const freshGameState = freshGameSnap.data() as GameState;
-        
+
         const wordToEnd = freshGameState.words.find(w => w.text === wordText);
         if (!wordToEnd || wordToEnd.isEliminated) {
             toast({ title: "Invalid Word", description: "Word not found or already eliminated.", variant: "destructive"});
@@ -316,7 +333,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
 
         const updatedWords = freshGameState.words.map(w => w.text === wordText ? { ...w, isEliminated: true } : w);
         const newEliminationCount = (freshGameState.eliminationCount || 0) + 1;
-        let newStatus: GameStatus = freshGameState.status; 
+        let newStatus: GameStatus = freshGameState.status;
         let gameWinner: GameState['winner'] = null;
         let reason = "";
         let finalPlayersState = freshGameState.players;
@@ -333,7 +350,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         transaction.update(gameDocRef, {
           words: updatedWords,
           eliminationCount: newEliminationCount,
-          status: newStatus, 
+          status: newStatus,
           winner: gameWinner,
           winningReason: reason,
           gameLog: arrayUnion(`${player.name} (Communicator) eliminated "${wordText}". Eliminations: ${newEliminationCount}/${freshGameState.maxEliminations}. ${reason}`),
@@ -342,7 +359,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       });
     } catch (error) {
       console.error("Error eliminating word:", error);
-      if ((error as Error).message !== "Invalid word for elimination") { 
+      if ((error as Error).message !== "Invalid word for elimination") {
         toast({ title: "Elimination Error", description: (error as Error).message, variant: "destructive"});
       }
     }
@@ -381,17 +398,17 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         const lockedInWordData = { wordText, playerId: localPlayerId, isCorrect: !!guessedWord?.isTarget };
 
         const systemMessage: ChatMessage = {
-          id: generateShortId(10),
-          playerId: 'SYSTEM_GAME_EVENT',
-          playerName: 'Game Event',
-          text: `${player.name} locked in the word: "${wordText}".`,
-          timestamp: Date.now(),
+            id: generateShortId(10),
+            playerId: 'SYSTEM_GAME_EVENT',
+            playerName: 'Game Event',
+            text: `${player.name} locked in the word: "${wordText}".`,
+            timestamp: Date.now(),
         };
 
         if (guessedWord.isTarget) {
           newStatus = 'post-guess-reveal';
-          reason = `Team locked in the correct word: "${wordText}"! Now Imposters try to find the Helper. Key:CORRECT_WORD_LOCKED`;
-          finalPlayersState = freshGameState.players.map(p => 
+          reason = `Team locked in the correct word: "${wordText}"! Key:CORRECT_WORD_LOCKED`;
+          finalPlayersState = freshGameState.players.map(p =>
             p.role === 'Imposter' ? {...p, isRevealedImposter: true} : p
           );
         } else {
@@ -408,7 +425,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           winningReason: reason,
           gameLog: arrayUnion(`${player.name} locked in "${wordText}". ${reason}`),
           players: finalPlayersState,
-          chatMessages: arrayUnion(systemMessage), // Add the system message to chat
+          chatMessages: arrayUnion(systemMessage),
         });
       });
     } catch (error) {
@@ -445,30 +462,31 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         if (!freshGameSnap.exists()) throw new Error("Game not found");
         let freshGameState = freshGameSnap.data() as GameState;
 
-        let gameWinner: GameState['winner'] = 'Team'; 
+        let gameWinner: GameState['winner'] = 'Team';
         let reason = "";
-        
+
         const wrongEliminationsCount = freshGameState.words.filter(w => w.isEliminated && !w.isTarget).length;
 
         if (accusedPlayer.role === 'Helper') {
-          gameWinner = 'Team'; // Overall team won by guessing word, but Imposters get points for exposing Helper
+          gameWinner = 'Team'; // Team still won the round, Imposter gets points for the find
           reason = `Team guessed the word! Imposters (${accuser.name}) correctly exposed ${accusedPlayer.name} as the Helper. Key:HELPER_EXPOSED`;
         } else {
           gameWinner = 'Team';
+          const helperName = freshGameState.players.find(p => p.role === 'Helper')?.name || 'The Helper';
           if (wrongEliminationsCount === 0) {
-            reason = `Team achieved a PERFECT GAME! They guessed the word, Helper (${freshGameState.players.find(p=>p.role==='Helper')?.name || 'Helper'}) remained hidden, and no wrong words were eliminated. Key:PERFECT_GAME`;
+            reason = `Team achieved a PERFECT GAME! They guessed the word, ${helperName} remained hidden, and no wrong words were eliminated. Key:PERFECT_GAME`;
           } else {
             reason = `Team guessed the word! Imposters (${accuser.name}) failed to expose the Helper. ${accusedPlayer.name} was not the Helper. Key:HELPER_HIDDEN`;
           }
         }
-        
+
         freshGameState = {...freshGameState, winner: gameWinner, winningReason: reason, status: 'finished'};
         const finalPlayersState = calculateScores(freshGameState);
 
 
         transaction.update(gameDocRef, {
           status: 'finished' as GameStatus,
-          winner: gameWinner, 
+          winner: gameWinner,
           winningReason: reason,
           gameLog: arrayUnion(`${accuser.name} (Imposter) accused ${accusedPlayer.name} of being the Helper. Result: ${reason}`),
           players: finalPlayersState,
@@ -486,7 +504,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     try {
       await runTransaction(db, async (transaction) => {
         const gameSnap = await transaction.get(gameDocRef);
-        if (!gameSnap.exists()) return; 
+        if (!gameSnap.exists()) return;
 
         const currentData = gameSnap.data() as GameState;
         const playerToRemove = currentData.players.find(p => p.id === localPlayerId);
@@ -495,8 +513,15 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           const updatedPlayers = currentData.players.filter(p => p.id !== localPlayerId);
           const newActualPlayerCount = Math.max(0, updatedPlayers.length);
 
-          if (updatedPlayers.length === 0) { 
+          if (updatedPlayers.length === 0 && currentData.status !== 'finished') {
             transaction.delete(gameDocRef);
+            console.log(`Game ${currentData.gameId} deleted as last player left.`);
+          } else if (updatedPlayers.length === 0 && currentData.status === 'finished') {
+             transaction.update(gameDocRef, {
+                players: updatedPlayers,
+                actualPlayerCount: 0,
+                gameLog: arrayUnion(`${playerToRemove.name} left the finished game.`),
+             });
           } else {
             let newHostId = currentData.hostId;
             let newPlayersArray = updatedPlayers;
@@ -505,11 +530,11 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
             if (playerToRemove.isHost && updatedPlayers.length > 0) {
               newHostId = updatedPlayers[0].id;
               newPlayersArray = updatedPlayers.map((p, idx) =>
-                idx === 0 ? { ...p, isHost: true } : { ...p, isHost: p.isHost || false } 
+                idx === 0 ? { ...p, isHost: true } : { ...p, isHost: p.isHost || false }
               );
               logMsg = `${playerToRemove.name} (Host) left. ${updatedPlayers[0].name} is the new host.`;
             }
-            
+
             if (newActualPlayerCount < currentData.minPlayers && currentData.status !== 'lobby' && currentData.status !== 'finished') {
               let reason = `${playerToRemove.name} left. Not enough players to continue. Game ended.`;
               const finalPlayers = calculateScores({...currentData, players: newPlayersArray, winner: 'NoOne', winningReason: reason, words: currentData.words, targetWord: currentData.targetWord });
@@ -519,7 +544,8 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
                   status: 'finished' as GameStatus,
                   winner: 'NoOne' as GameState['winner'],
                   winningReason: reason,
-                  gameLog: arrayUnion(reason, logMsg) 
+                  hostId: newHostId,
+                  gameLog: arrayUnion(reason, logMsg)
               });
             } else {
               transaction.update(gameDocRef, {
@@ -532,6 +558,9 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           }
         }
       });
+      if (gameState.players.length -1 === 0 && gameState.status !== 'finished') {
+         setGameState(null);
+      }
     } catch (error) {
       console.error("Error leaving game:", error);
       toast({ title: "Error Leaving Game", description: (error as Error).message, variant: "destructive"});
@@ -543,7 +572,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       toast({title: "Update Error: Player or game not found.", variant: "destructive"});
       return;
     }
-    console.warn("updatePlayerInContext called, consider if a specific game action is more appropriate.");
+    console.warn("updatePlayerInContext called directly. Ensure this is intended and not better handled by a specific game action.");
     const gameDocRef = doc(db, "games", gameState.gameId);
     const updatedPlayers = gameState.players.map(p => p.id === playerData.id ? { ...p, ...playerData } : p);
     try {
@@ -576,40 +605,47 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       if (!aiData || !aiData.words || aiData.words.length === 0 || !aiData.targetWord || !aiData.helperClue || !aiData.clueHolderClue) {
         throw new Error("Failed to generate complete game data for the new round.");
       }
-      
-      const currentPlayersWithScores = gameState.players.map(p => ({
+
+      const playersForNewRound = gameState.players.map(p => ({
         id: p.id,
         name: p.name,
-        score: p.score || 0, 
+        score: p.score || 0,
         isHost: p.id === gameState.hostId,
-        role: "ClueHolder" as Role, 
+        // Role, clue, isAlive, isRevealedImposter will be reset/reassigned
+        role: "ClueHolder" as Role, // Placeholder, will be reassigned
         clue: null,
-        isAlive: true, 
-        isRevealedImposter: false, 
+        isAlive: true,
+        isRevealedImposter: false,
       }));
-      
-      const shuffledPlayersForAssignment = [...currentPlayersWithScores].sort(() => Math.random() - 0.5);
+
+      const scoresSnapshot = playersForNewRound.reduce((acc, p) => {
+        acc[p.id] = p.score;
+        return acc;
+      }, {} as Record<string, number>);
+
+      const shuffledPlayersForAssignment = shuffleArray([...playersForNewRound]);
       const { updatedPlayers, gameWords } = assignRolesAndClues(shuffledPlayersForAssignment, aiData, gameState.minPlayers, gameState.maxPlayers);
 
       const gameDocRef = doc(db, "games", gameState.gameId);
       await updateDoc(gameDocRef, {
         status: 'role-reveal' as GameStatus,
-        words: gameWords, 
+        words: gameWords,
         targetWord: aiData.targetWord,
-        players: updatedPlayers, 
+        players: updatedPlayers,
         eliminationCount: 0,
         lockedInWordGuess: null,
         winner: null,
         winningReason: "",
-        chatMessages: [], 
+        chatMessages: [],
         gameLog: arrayUnion(`Host ${gameState.players.find(p => p.id === gameState.hostId)?.name || 'Host'} started a new round.`),
         actualPlayerCount: gameState.players.length,
+        playerScoresBeforeRound: scoresSnapshot,
       });
     } catch (error) {
       console.error("Failed to start new round:", error);
       toast({ title: "Error Starting New Round", description: (error as Error).message, variant: "destructive" });
     } finally {
-        setIsLoading(false); 
+        setIsLoading(false);
     }
   };
 
@@ -630,7 +666,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     acknowledgeRole,
     updatePlayerInContext,
     startNewRound,
-  }), [gameState, localPlayerId, isLoading, isInitialized, createGame, joinGame, startGameAI, sendChatMessage, leaveGame, eliminateWord, lockInWord, imposterAccuseHelperInTwist, acknowledgeRole, updatePlayerInContext, startNewRound, toast ]); 
+  }), [gameState, localPlayerId, isLoading, isInitialized, toast, setLocalPlayerIdState]);
 
   return (
     <GameContext.Provider value={contextValue}>

@@ -8,18 +8,15 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { Award, Users, ShieldCheck, ShieldX, Eye, UserCheck, UserX, Info, MessageSquare, ShieldQuestion, RotateCcw, TrendingUp } from 'lucide-react';
-import { useGame } from '@/context/GameContext'; // Import useGame
-import { useToast } from '@/hooks/use-toast'; // Import useToast
+import { Award, Users, ShieldCheck, ShieldX, Eye, UserCheck, UserX, Info, MessageSquare, ShieldQuestion, RotateCcw, TrendingUp, MinusCircle, PlusCircle, Smile, Frown } from 'lucide-react';
+import { useGame } from '@/context/GameContext';
+import { useToast } from '@/hooks/use-toast';
 
 interface GameOverScreenProps {
-  winner?: GameState['winner'];
-  winningReason?: GameState['winningReason'];
-  gameLog: string[];
+  gameState: GameState; // Pass full gameState
   localPlayer: Player;
-  players: Player[];
-  gameId: string; // Pass gameId
-  isHost: boolean; // Pass isHost
+  gameId: string;
+  isHost: boolean;
 }
 
 const RoleIconMini: React.FC<{ role: Player['role'] }> = ({ role }) => {
@@ -32,10 +29,12 @@ const RoleIconMini: React.FC<{ role: Player['role'] }> = ({ role }) => {
   }
 };
 
-export default function GameOverScreen({ winner, winningReason, gameLog, localPlayer, players, gameId, isHost }: GameOverScreenProps) {
+export default function GameOverScreen({ gameState, localPlayer, gameId, isHost }: GameOverScreenProps) {
   const router = useRouter();
-  const { startNewRound, leaveGame } = useGame(); // Get startNewRound from context
+  const { startNewRound, leaveGame } = useGame();
   const { toast } = useToast();
+
+  const { winner, winningReason, gameLog, players, playerScoresBeforeRound } = gameState;
 
   let titleText = "Game Over!";
   let descriptionText = winningReason || "The session has concluded.";
@@ -49,8 +48,25 @@ export default function GameOverScreen({ winner, winningReason, gameLog, localPl
     titleIcon = <ShieldCheck className="w-12 h-12 text-green-500" />;
   } else if (winner === 'NoOne') {
     titleText = "Stalemate!";
-     titleIcon = <Users className="w-12 h-12 text-muted-foreground" />;
+    titleIcon = <Users className="w-12 h-12 text-muted-foreground" />;
   }
+
+  const previousScore = playerScoresBeforeRound?.[localPlayer.id] ?? 0;
+  const pointsGainedThisRound = localPlayer.score - previousScore;
+  let pointsMessage = "";
+  let PointsIcon = Smile;
+
+  if (pointsGainedThisRound > 0) {
+    pointsMessage = `You gained ${pointsGainedThisRound} points this round!`;
+    PointsIcon = PlusCircle;
+  } else if (pointsGainedThisRound === 0) {
+    pointsMessage = `You gained no points this round.`;
+    PointsIcon = MinusCircle;
+  } else { // pointsGainedThisRound < 0 (should not happen with current rules)
+    pointsMessage = `You lost ${Math.abs(pointsGainedThisRound)} points this round.`;
+    PointsIcon = Frown;
+  }
+
 
   const handlePlayAgain = async () => {
     if (!isHost) {
@@ -67,7 +83,7 @@ export default function GameOverScreen({ winner, winningReason, gameLog, localPl
 
   const handleLeaveGame = async () => {
     await leaveGame();
-    router.push('/'); // Navigate to homepage after leaving
+    router.push('/'); 
     toast({ title: "Left Game" });
   };
 
@@ -78,6 +94,12 @@ export default function GameOverScreen({ winner, winningReason, gameLog, localPl
           <div className="mb-4">{titleIcon}</div>
           <CardTitle className="text-4xl font-bold">{titleText}</CardTitle>
           <CardDescription className="text-lg text-muted-foreground">{descriptionText}</CardDescription>
+          {pointsMessage && (
+            <div className={`mt-3 text-md font-semibold flex items-center justify-center gap-2 ${pointsGainedThisRound > 0 ? 'text-green-600' : pointsGainedThisRound < 0 ? 'text-red-600' : 'text-muted-foreground'}`}>
+              <PointsIcon className={`w-5 h-5 ${pointsGainedThisRound > 0 ? 'text-green-500' : pointsGainedThisRound < 0 ? 'text-red-500' : 'text-muted-foreground'}`} />
+              {pointsMessage}
+            </div>
+          )}
         </CardHeader>
         <CardContent className="space-y-6">
           <div>
