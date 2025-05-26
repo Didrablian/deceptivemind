@@ -3,7 +3,7 @@
 
 import type { ReactNode } from 'react';
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
-import { doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, arrayRemove, increment, runTransaction, deleteDoc, serverTimestamp, type Timestamp, writeBatch } from 'firebase/firestore';
+import { doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, arrayRemove, increment, runTransaction, deleteDoc, Timestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type { GameState, Player, GameWord, ChatMessage, Role, GameStatus } from '@/lib/types';
 import { initialGameState, generateShortId, assignRolesAndClues, calculateScores } from '@/lib/gameUtils';
@@ -21,12 +21,11 @@ interface GameContextProps {
   startGameAI: () => Promise<void>;
   sendChatMessage: (text: string) => Promise<void>;
   leaveGame: () => Promise<void>;
-  // New game actions
   eliminateWord: (wordText: string) => Promise<void>;
   lockInWord: (wordText: string) => Promise<void>;
   imposterAccuseHelperInTwist: (accusedPlayerId: string) => Promise<void>;
   acknowledgeRole: () => Promise<void>;
-  updatePlayerInContext: (playerData: Partial<Player> & { id: string }) => Promise<void>; // Kept for potential use
+  updatePlayerInContext: (playerData: Partial<Player> & { id: string }) => Promise<void>;
 }
 
 const GameContext = createContext<GameContextProps | undefined>(undefined);
@@ -59,7 +58,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       if (!gameIdFromParams) setGameState(null);
       return;
     }
-    
+
     setIsLoading(true);
     const gameDocRef = doc(db, "games", gameIdFromParams);
     const unsubscribe = onSnapshot(gameDocRef, (docSnap) => {
@@ -67,15 +66,23 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         const data = docSnap.data() as GameState;
         const processedData = {
           ...data,
-          chatMessages: data.chatMessages ? data.chatMessages.map(msg => ({
-            ...msg,
-            timestamp: msg.timestamp && (msg.timestamp as unknown as Timestamp).toDate ? (msg.timestamp as unknown as Timestamp).toDate().getTime() : Date.now() 
-          })) : [],
-          players: data.players ? data.players.map(p => ({...p, score: p.score || 0})) : [],
+          chatMessages: data.chatMessages ? data.chatMessages.map(msg => {
+            let processedTimestamp: number;
+            if (typeof msg.timestamp === 'number') {
+              processedTimestamp = msg.timestamp; // Already a number (e.g., from Date.now())
+            } else if (msg.timestamp && (msg.timestamp as unknown as Timestamp).toDate) {
+              processedTimestamp = (msg.timestamp as unknown as Timestamp).toDate().getTime(); // Convert Firestore Timestamp to number
+            } else {
+              processedTimestamp = Date.now(); // Fallback, should ideally not happen
+            }
+            return {...msg, timestamp: processedTimestamp };
+          }) : [],
+          players: data.players ? data.players.map(p => ({...p, score: p.score || 0, isHost: p.isHost || false, isRevealedImposter: p.isRevealedImposter || false })) : [],
         };
         setGameState(processedData);
       } else {
         setGameState(null);
+        toast({ title: "Game Not Found", description: `Game with ID ${gameIdFromParams} does not exist.`, variant: "destructive"});
       }
       setIsLoading(false);
     }, (error) => {
@@ -101,10 +108,10 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
 
   const createGame = async (username: string): Promise<string | null> => {
     if (!isInitialized || !localPlayerId) {
-      toast({ title: "Context not ready", description: "Player ID not available.", variant: "destructive"});
+      toast({ title: "Context not ready", description: "Player ID not available. Please refresh.", variant: "destructive"});
       return null;
     }
-    
+
     const newGameId = generateShortId(6).toUpperCase();
     const hostPlayer: Player = {
       id: localPlayerId,
@@ -117,21 +124,21 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       isRevealedImposter: false,
     };
     const newGame = initialGameState(newGameId, hostPlayer);
-    
+
     try {
       const gameDocRef = doc(db, "games", newGameId);
       await setDoc(gameDocRef, newGame);
       return newGameId;
     } catch (error) {
       console.error("Error creating game:", error);
-      toast({ title: "Error Creating Game", variant: "destructive"});
+      toast({ title: "Error Creating Game", description: (error as Error).message, variant: "destructive"});
       return null;
     }
   };
 
   const joinGame = async (gameIdToJoin: string, username: string): Promise<boolean> => {
     if (!isInitialized || !localPlayerId) {
-      toast({ title: "Context not ready", description: "Player ID not available.", variant: "destructive"});
+      toast({ title: "Context not ready", description: "Player ID not available. Please refresh.", variant: "destructive"});
       return false;
     }
     const gameDocRef = doc(db, "games", gameIdToJoin);
@@ -139,7 +146,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       return await runTransaction(db, async (transaction) => {
         const gameSnap = await transaction.get(gameDocRef);
         if (!gameSnap.exists()) {
-          toast({ title: "Game Not Found", variant: "destructive" });
+          toast({ title: "Game Not Found", description: `Game with ID ${gameIdToJoin} does not exist.`, variant: "destructive" });
           return false;
         }
 
@@ -148,11 +155,11 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           return true; // Already in game
         }
         if (currentGameData.players.length >= currentGameData.maxPlayers) {
-          toast({ title: "Lobby Full", variant: "destructive" });
+          toast({ title: "Lobby Full", description: `This game lobby is full (${currentGameData.maxPlayers} players max).`, variant: "destructive" });
           return false;
         }
         if (currentGameData.status !== 'lobby') {
-          toast({ title: "Game in Progress", variant: "destructive" });
+          toast({ title: "Game in Progress", description: "This game has already started or finished.", variant: "destructive" });
           return false;
         }
 
@@ -175,58 +182,67 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       });
     } catch (error) {
       console.error("Error joining game:", error);
-      toast({ title: "Error Joining Game", variant: "destructive"});
+      toast({ title: "Error Joining Game", description: (error as Error).message, variant: "destructive"});
       return false;
     }
   };
 
-  const startGameAI = async () => {
+ const startGameAI = async () => {
     if (!gameState || !localPlayerId || gameState.hostId !== localPlayerId) {
-      toast({ title: "Not Host", variant: "destructive" });
+      toast({ title: "Not Host", description: "Only the host can start the game.", variant: "destructive" });
       return;
     }
     if (gameState.players.length < gameState.minPlayers || gameState.players.length > gameState.maxPlayers) {
-      toast({ title: "Invalid Player Count", description: `Need ${gameState.minPlayers}-${gameState.maxPlayers} players.`, variant: "destructive" });
+      toast({ title: "Invalid Player Count", description: `Need ${gameState.minPlayers}-${gameState.maxPlayers} players. Currently ${gameState.players.length}.`, variant: "destructive" });
       return;
     }
 
     setIsLoading(true);
     try {
       toast({ title: "Starting Game...", description: "AI is generating words and clues." });
-      const aiData = await generateWordsAndClues({ numberOfWords: 9 }); 
-      
+      const aiData = await generateWordsAndClues({ numberOfWords: 9 });
+
       if (!aiData || !aiData.words || aiData.words.length < 9 || !aiData.targetWord || !aiData.helperClue || !aiData.clueHolderClue) {
-        throw new Error("AI failed to generate complete game data.");
+        throw new Error("AI failed to generate complete game data. Please try starting again.");
       }
-      
+
       const { updatedPlayers, gameWords } = assignRolesAndClues(gameState.players, aiData);
-      
+
       const gameDocRef = doc(db, "games", gameState.gameId);
       await updateDoc(gameDocRef, {
-        status: 'role-reveal',
+        status: 'role-reveal' as GameStatus,
         words: gameWords,
         targetWord: aiData.targetWord,
         players: updatedPlayers,
-        gameLog: arrayUnion(`Game started by ${gameState.players.find(p=>p.isHost)?.name}. Roles assigned!`),
-        chatMessages: [],
+        gameLog: arrayUnion(`Game started by ${gameState.players.find(p=>p.id === gameState.hostId)?.name}. Roles assigned!`),
+        chatMessages: [], // Reset chat messages
         eliminationCount: 0,
         lockedInWordGuess: null,
-        actualPlayerCount: gameState.players.length, // Set actual count at game start
+        winner: null,
+        winningReason: "",
+        actualPlayerCount: gameState.players.length, // Confirm actual player count at game start
       });
+      // setIsLoading(false); // Firestore listener will update loading state
     } catch (error) {
       console.error("Failed to start game with AI:", error);
       toast({ title: "Error Starting Game", description: (error as Error).message, variant: "destructive" });
-      setIsLoading(false);
+      setIsLoading(false); // Ensure loading is false on error
     }
   };
 
   const acknowledgeRole = async () => {
     if (!gameState || !localPlayerId) return;
     const gameDocRef = doc(db, "games", gameState.gameId);
-    // Simple transition, more complex logic could check if all players acknowledged
-    await updateDoc(gameDocRef, { status: 'discussion' });
+    // For now, directly transition to discussion.
+    // Could add logic to wait for all players to acknowledge.
+    try {
+      await updateDoc(gameDocRef, { status: 'discussion' as GameStatus });
+    } catch (error) {
+      console.error("Error acknowledging role:", error);
+      toast({ title: "Error", description: "Could not update game status.", variant: "destructive"});
+    }
   };
-  
+
   const sendChatMessage = async (text: string) => {
     if (!gameState || !localPlayerId) return;
     const localPlayer = gameState.players.find(p => p.id === localPlayerId);
@@ -237,10 +253,15 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       playerId: localPlayer.id,
       playerName: localPlayer.name,
       text: text,
-      timestamp: serverTimestamp() as Timestamp, 
+      timestamp: Date.now(), // Use client-generated number timestamp
     };
     const gameDocRef = doc(db, "games", gameState.gameId);
-    await updateDoc(gameDocRef, { chatMessages: arrayUnion(newMessage) });
+    try {
+      await updateDoc(gameDocRef, { chatMessages: arrayUnion(newMessage) });
+    } catch (error) {
+      console.error("Error sending chat message:", error);
+      toast({ title: "Chat Error", description: "Could not send message.", variant: "destructive"});
+    }
   };
 
   const eliminateWord = async (wordText: string) => {
@@ -250,12 +271,12 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       toast({ title: "Invalid Action", description: "Only the Communicator can eliminate words.", variant: "destructive" });
       return;
     }
-    if (gameState.status !== 'discussion' && gameState.status !== 'word-elimination') {
-        toast({ title: "Invalid Action", description: "Words can only be eliminated during discussion/elimination phase.", variant: "destructive" });
+    if (gameState.status !== 'discussion' && gameState.status !== 'word-elimination') { // word-elimination is an alias for discussion here
+        toast({ title: "Invalid Action", description: "Words can only be eliminated during discussion phase.", variant: "destructive" });
         return;
     }
     if (gameState.eliminationCount >= gameState.maxEliminations) {
-        toast({ title: "Max Eliminations Reached", variant: "default" });
+        toast({ title: "Max Eliminations Reached", description: `Maximum ${gameState.maxEliminations} words can be eliminated.`, variant: "default" });
         return;
     }
 
@@ -267,43 +288,59 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         return;
     }
 
-    const updatedWords = gameState.words.map(w => w.text === wordText ? { ...w, isEliminated: true } : w);
-    const newEliminationCount = gameState.eliminationCount + 1;
-    let newStatus: GameStatus = 'discussion'; // Return to discussion
-    let winner: GameState['winner'] = null;
-    let winningReason = "";
-    let finalPlayersState = gameState.players;
+    try {
+      await runTransaction(db, async (transaction) => {
+        const freshGameSnap = await transaction.get(gameDocRef);
+        if (!freshGameSnap.exists()) throw new Error("Game not found");
+        const freshGameState = freshGameSnap.data() as GameState;
 
-    if (wordToEnd.isTarget) {
-      winner = 'Imposters';
-      winningReason = `The Communicator eliminated the secret word (${wordText})!`;
-      newStatus = 'finished';
-      const scoredPlayers = calculateScores({...gameState, words: updatedWords, eliminationCount: newEliminationCount, winner, winningReason });
-      finalPlayersState = scoredPlayers;
-    } else if (newEliminationCount >= gameState.maxEliminations) {
-      // If max eliminations reached and target not eliminated, team must lock in.
-      // For now, let's assume game continues to lock-in phase or could be a loss if no target found.
-      // This part of the rule "Max 3 eliminations" needs clarity if target not found & not eliminated.
-      // For now, let's assume it goes to lock-in or if no words left, a specific outcome.
-      // The current game loop doesn't explicitly end here, it relies on lock-in.
-       newStatus = 'discussion'; // Or a dedicated "final guess" phase
+        const updatedWords = freshGameState.words.map(w => w.text === wordText ? { ...w, isEliminated: true } : w);
+        const newEliminationCount = freshGameState.eliminationCount + 1;
+        let newStatus: GameStatus = 'discussion';
+        let winner: GameState['winner'] = null;
+        let winningReason = "";
+        let finalPlayersState = freshGameState.players;
+
+        if (wordToEnd.isTarget) {
+          winner = 'Imposters';
+          winningReason = `The Communicator eliminated the secret word (${wordText})! Imposters win.`;
+          newStatus = 'finished';
+          const scoredPlayers = calculateScores({...freshGameState, words: updatedWords, eliminationCount: newEliminationCount, winner, winningReason, players: freshGameState.players });
+          finalPlayersState = scoredPlayers;
+        } else if (newEliminationCount >= freshGameState.maxEliminations) {
+           // If max eliminations reached and target not eliminated, team MUST lock in a word.
+           // No automatic win/loss here; game proceeds. Could add a toast.
+           toast({title: "Max Eliminations Reached", description: `No more eliminations. Team must lock in a word.`});
+        }
+
+        transaction.update(gameDocRef, {
+          words: updatedWords,
+          eliminationCount: newEliminationCount,
+          status: newStatus,
+          winner: winner,
+          winningReason: winningReason,
+          gameLog: arrayUnion(`${player.name} (Communicator) eliminated "${wordText}". Eliminations: ${newEliminationCount}/${freshGameState.maxEliminations}. ${winner ? winningReason : ''}`),
+          players: finalPlayersState,
+        });
+      });
+    } catch (error) {
+      console.error("Error eliminating word:", error);
+      toast({ title: "Elimination Error", description: (error as Error).message, variant: "destructive"});
     }
-
-    await updateDoc(gameDocRef, {
-      words: updatedWords,
-      eliminationCount: newEliminationCount,
-      status: newStatus,
-      winner: winner,
-      winningReason: winningReason,
-      gameLog: arrayUnion(`${player.name} (Communicator) eliminated "${wordText}". Eliminations: ${newEliminationCount}/${gameState.maxEliminations}.`),
-      players: finalPlayersState, // Update scores if game ended
-    });
   };
 
   const lockInWord = async (wordText: string) => {
     if (!gameState || !localPlayerId) return;
     const player = gameState.players.find(p => p.id === localPlayerId);
     if (!player) return;
+    if (player.role === 'Communicator') {
+      toast({ title: "Invalid Action", description: "Communicator eliminates, other team members lock in.", variant: "destructive" });
+      return;
+    }
+    if (gameState.status !== 'discussion' && gameState.status !== 'word-elimination') {
+      toast({ title: "Invalid Phase", description: "Can only lock in a word during discussion.", variant: "destructive" });
+      return;
+    }
 
     const gameDocRef = doc(db, "games", gameState.gameId);
     const guessedWord = gameState.words.find(w => w.text === wordText);
@@ -312,71 +349,96 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       toast({ title: "Invalid Guess", description: "Cannot lock in an eliminated or non-existent word.", variant: "destructive" });
       return;
     }
-    
-    let newStatus: GameStatus = gameState.status;
-    let winner: GameState['winner'] = null;
-    let winningReason = "";
-    let finalPlayersState = gameState.players;
 
-    if (guessedWord.isTarget) {
-      newStatus = 'post-guess-reveal';
-      winningReason = `Team locked in the correct word: "${wordText}"! Now Imposters try to find the Helper.`;
-      // Mark Imposters as revealed for UI
-      finalPlayersState = gameState.players.map(p => p.role === 'Imposter' ? {...p, isRevealedImposter: true} : p);
-    } else {
-      winner = 'Imposters';
-      winningReason = `Team locked in the wrong word: "${wordText}". The secret word was "${gameState.targetWord}".`;
-      newStatus = 'finished';
-      const scoredPlayers = calculateScores({...gameState, winner, winningReason, lockedInWordGuess: {wordText, playerId: localPlayerId} });
-      finalPlayersState = scoredPlayers;
+    try {
+      await runTransaction(db, async (transaction) => {
+        const freshGameSnap = await transaction.get(gameDocRef);
+        if (!freshGameSnap.exists()) throw new Error("Game not found");
+        const freshGameState = freshGameSnap.data() as GameState;
+
+        let newStatus: GameStatus = freshGameState.status;
+        let winner: GameState['winner'] = null;
+        let winningReason = "";
+        let finalPlayersState = freshGameState.players;
+
+        if (guessedWord.isTarget) {
+          newStatus = 'post-guess-reveal';
+          winningReason = `Team locked in the correct word: "${wordText}"! Now Imposters try to find the Helper.`;
+          finalPlayersState = freshGameState.players.map(p => p.role === 'Imposter' ? {...p, isRevealedImposter: true} : p);
+        } else {
+          winner = 'Imposters';
+          winningReason = `Team locked in the wrong word: "${wordText}". The secret word was "${freshGameState.targetWord}". Imposters win.`;
+          newStatus = 'finished';
+          const scoredPlayers = calculateScores({...freshGameState, winner, winningReason, lockedInWordGuess: {wordText, playerId: localPlayerId}, players: freshGameState.players });
+          finalPlayersState = scoredPlayers;
+        }
+
+        transaction.update(gameDocRef, {
+          status: newStatus,
+          lockedInWordGuess: { wordText, playerId: localPlayerId, isCorrect: guessedWord.isTarget },
+          winner: winner,
+          winningReason: winningReason,
+          gameLog: arrayUnion(`${player.name} locked in "${wordText}". ${winningReason}`),
+          players: finalPlayersState,
+        });
+      });
+    } catch (error) {
+      console.error("Error locking in word:", error);
+      toast({ title: "Lock-in Error", description: (error as Error).message, variant: "destructive"});
     }
-
-    await updateDoc(gameDocRef, {
-      status: newStatus,
-      lockedInWordGuess: { wordText, playerId: localPlayerId },
-      winner: winner,
-      winningReason: winningReason,
-      gameLog: arrayUnion(`${player.name} locked in "${wordText}". ${winningReason}`),
-      players: finalPlayersState,
-    });
   };
 
   const imposterAccuseHelperInTwist = async (accusedPlayerId: string) => {
     if (!gameState || !localPlayerId || gameState.status !== 'post-guess-reveal') return;
-    
+
     const accuser = gameState.players.find(p => p.id === localPlayerId);
-    if (!accuser || accuser.role !== 'Imposter') {
+    if (!accuser || accuser.role !== 'Imposter' || !accuser.isRevealedImposter) {
       toast({ title: "Invalid Action", description: "Only revealed Imposters can accuse the Helper now.", variant: "destructive" });
       return;
     }
-    
+
     const accusedPlayer = gameState.players.find(p => p.id === accusedPlayerId);
     if (!accusedPlayer) return;
+    if (accusedPlayer.role === 'Imposter') {
+      toast({ title: "Invalid Target", description: "Cannot accuse a fellow Imposter.", variant: "destructive" });
+      return;
+    }
 
     const gameDocRef = doc(db, "games", gameState.gameId);
-    let winner: GameState['winner'];
-    let winningReason = "";
+    try {
+      await runTransaction(db, async (transaction) => {
+        const freshGameSnap = await transaction.get(gameDocRef);
+        if (!freshGameSnap.exists()) throw new Error("Game not found");
+        const freshGameState = freshGameSnap.data() as GameState;
 
-    if (accusedPlayer.role === 'Helper') {
-      winner = 'Imposters'; // Imposters win by points, but team also gets points
-      winningReason = `Imposters correctly exposed ${accusedPlayer.name} as the Helper!`;
-    } else {
-      winner = 'Team'; // Team wins (Helper hidden)
-      winningReason = `Imposters failed to expose the Helper. ${accusedPlayer.name} was not the Helper.`;
+        let winner: GameState['winner'];
+        let winningReason = "";
+
+        if (accusedPlayer.role === 'Helper') {
+          winner = 'Imposters'; // As per scoring: Team wins (Helper exposed)	+1 for team, +3 for Imposters
+          winningReason = `Imposters correctly exposed ${accusedPlayer.name} as the Helper!`;
+        } else {
+          winner = 'Team';
+          winningReason = `Imposters failed to expose the Helper. ${accusedPlayer.name} was not the Helper. Team wins!`;
+        }
+
+        const finalGameStateWithAccusation = {...freshGameState, winner, winningReason, players: freshGameState.players};
+        const scoredPlayers = calculateScores(finalGameStateWithAccusation);
+
+        transaction.update(gameDocRef, {
+          status: 'finished' as GameStatus,
+          winner: winner,
+          winningReason: winningReason,
+          gameLog: arrayUnion(`${accuser.name} (Imposter) accused ${accusedPlayer.name} of being the Helper. ${winningReason}`),
+          players: scoredPlayers,
+        });
+      });
+    } catch (error) {
+      console.error("Error during Helper accusation:", error);
+      toast({ title: "Accusation Error", description: (error as Error).message, variant: "destructive"});
     }
-    
-    const finalGameState = {...gameState, winner, winningReason};
-    const scoredPlayers = calculateScores(finalGameState);
-
-    await updateDoc(gameDocRef, {
-      status: 'finished',
-      winner: winner,
-      winningReason: winningReason,
-      gameLog: arrayUnion(`${accuser.name} (Imposter) accused ${accusedPlayer.name}. ${winningReason}`),
-      players: scoredPlayers,
-    });
   };
-  
+
   const leaveGame = async () => {
     if (!gameState || !localPlayerId || !isInitialized) return;
     const gameDocRef = doc(db, "games", gameState.gameId);
@@ -384,48 +446,62 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       await runTransaction(db, async (transaction) => {
         const gameSnap = await transaction.get(gameDocRef);
         if (!gameSnap.exists()) return;
-        
+
         const currentData = gameSnap.data() as GameState;
         const playerToRemove = currentData.players.find(p => p.id === localPlayerId);
 
         if (playerToRemove) {
           const updatedPlayers = currentData.players.filter(p => p.id !== localPlayerId);
-          const newActualPlayerCount = currentData.actualPlayerCount ? currentData.actualPlayerCount - 1 : updatedPlayers.length;
+          const newActualPlayerCount = Math.max(0, (currentData.actualPlayerCount || updatedPlayers.length) - 1);
 
-          if (updatedPlayers.length === 0) {
+          if (updatedPlayers.length === 0 && currentData.status === 'lobby') { // Only delete if lobby is empty
             transaction.delete(gameDocRef);
-          } else {
+          } else if (updatedPlayers.length < currentData.minPlayers && currentData.status !== 'lobby' && currentData.status !== 'finished') {
+            // If player leaving mid-game drops count below minimum, end game
+            transaction.update(gameDocRef, {
+                players: updatedPlayers,
+                actualPlayerCount: newActualPlayerCount,
+                status: 'finished' as GameStatus,
+                winner: 'NoOne' as GameState['winner'],
+                winningReason: `${playerToRemove.name} left. Not enough players to continue. Game ended.`,
+                gameLog: arrayUnion(`${playerToRemove.name} left. Game ended due to insufficient players.`)
+            });
+          }
+          else {
             let newHostId = currentData.hostId;
             let newPlayersArray = updatedPlayers;
             let logMsg = `${playerToRemove.name} left the game.`;
 
             if (playerToRemove.isHost && updatedPlayers.length > 0) {
-              newHostId = updatedPlayers[0].id; 
-              newPlayersArray = updatedPlayers.map((p, idx) => 
-                idx === 0 ? { ...p, isHost: true } : { ...p, isHost: (p.isHost || false) } // Ensure isHost is boolean
+              newHostId = updatedPlayers[0].id;
+              newPlayersArray = updatedPlayers.map((p, idx) =>
+                idx === 0 ? { ...p, isHost: true } : { ...p, isHost: p.isHost || false }
               );
-              newPlayersArray[0].isHost = true; // Explicitly set new host
               logMsg = `${playerToRemove.name} (Host) left. ${updatedPlayers[0].name} is the new host.`;
             }
-            transaction.update(gameDocRef, { 
-              players: newPlayersArray, 
-              hostId: newHostId, 
+            transaction.update(gameDocRef, {
+              players: newPlayersArray,
+              hostId: newHostId,
               gameLog: arrayUnion(logMsg),
               actualPlayerCount: newActualPlayerCount,
             });
           }
         }
       });
-      setGameState(null); 
+      if (gameState.players.filter(p => p.id !== localPlayerId).length === 0 && gameState.status === 'lobby') {
+        // If this was the last player in a lobby, gameState might be cleared by deletion
+        setGameState(null);
+      }
+      // Otherwise, local state will update via onSnapshot or user navigates away
     } catch (error) {
       console.error("Error leaving game:", error);
-      toast({ title: "Error Leaving Game", variant: "destructive"});
+      toast({ title: "Error Leaving Game", description: (error as Error).message, variant: "destructive"});
     }
   };
-  
+
   const updatePlayerInContext = async (playerData: Partial<Player> & { id: string }) => {
     if (!gameState || !isInitialized || !gameState.players.find(p => p.id === playerData.id)) {
-      toast({title: "Update Error", variant: "destructive"});
+      toast({title: "Update Error: Player or game not found.", variant: "destructive"});
       return;
     }
     const gameDocRef = doc(db, "games", gameState.gameId);
@@ -434,7 +510,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       await updateDoc(gameDocRef, { players: updatedPlayers });
     } catch (error) {
       console.error("Error updating player data in Firestore:", error);
-      toast({ title: "Player Update Error", variant: "destructive" });
+      toast({ title: "Player Update Error", description: (error as Error).message, variant: "destructive" });
     }
   };
 
@@ -454,7 +530,8 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     imposterAccuseHelperInTwist,
     acknowledgeRole,
     updatePlayerInContext,
-  }), [gameState, localPlayerId, isLoading, isInitialized, toast, createGame, joinGame, startGameAI, sendChatMessage, leaveGame, eliminateWord, lockInWord, imposterAccuseHelperInTwist, acknowledgeRole, updatePlayerInContext]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [gameState, localPlayerId, isLoading, isInitialized, toast]);
 
   return (
     <GameContext.Provider value={contextValue}>
