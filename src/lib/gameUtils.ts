@@ -1,3 +1,4 @@
+
 import type { Player, Role, GameWord, GameState } from './types';
 
 export function generateShortId(length: number = 6): string {
@@ -14,14 +15,18 @@ export function assignRolesAndClues(
   aiData: { targetWord: string; words: string[]; helperClue: string; clueHolderClue: string }
 ): { updatedPlayers: Player[]; gameWords: GameWord[] } {
   if (players.length !== 5) {
-    throw new Error("Role assignment requires exactly 5 players.");
+    // This check might be redundant if called correctly, but good for safety.
+    console.error("Role assignment called with incorrect player count:", players.length);
+    // Return players as is, or handle error more gracefully depending on desired behavior
+    // For now, returning them as is, but this situation should be avoided.
+    return { updatedPlayers: players, gameWords: [] }; 
   }
 
   const shuffledPlayers = [...players].sort(() => Math.random() - 0.5);
-  const roles: Role[] = ["Communicator", "Helper", "Imposter", "Imposter", "ClueHolder"];
+  const rolesToAssign: Role[] = ["Communicator", "Helper", "Imposter", "Imposter", "ClueHolder"];
 
   const updatedPlayers = shuffledPlayers.map((player, index) => {
-    const role = roles[index];
+    const role = rolesToAssign[index];
     let clue: string | undefined = undefined;
 
     if (role === "Helper") {
@@ -34,8 +39,8 @@ export function assignRolesAndClues(
       ...player,
       role,
       clue,
-      isAlive: true,
-      hasCalledMeeting: false,
+      isAlive: true, // Ensure isAlive is reset/set
+      hasCalledMeeting: false, // Reset meeting status
     };
   });
 
@@ -44,12 +49,14 @@ export function assignRolesAndClues(
     isTarget: word === aiData.targetWord,
   }));
 
-  // Ensure target word is one of the 9 words
-  if (!gameWords.find(w => w.isTarget)) {
-      // This case should ideally not happen if AI is consistent
-      // As a fallback, make the first word the target if AI fails this.
-      if (gameWords.length > 0) gameWords[0].isTarget = true;
-      console.warn("Target word from AI was not in the word list. Fallback applied.")
+  // Ensure target word is one of the 9 words if AI data is valid
+  if (aiData.words.length > 0 && !gameWords.find(w => w.isTarget)) {
+      if (gameWords.length > 0) {
+        gameWords[0].isTarget = true; // Fallback: make the first word the target
+        console.warn("Target word from AI was not in the word list. Fallback applied to first word.");
+      } else {
+        console.error("AI returned empty word list, cannot assign target word.");
+      }
   }
 
 
@@ -61,26 +68,28 @@ export function getRoleExplanation(role: Role, targetWord?: string, clue?: strin
     case "Communicator":
       return "Your Role: Communicator 🕵️‍♂️\nObjective: Observe the other players. Identify the two Imposters and vote them out. You do not know the target word or any clues. Pay attention to how players discuss the words and clues.";
     case "Helper":
-      return `Your Role: Helper 💡\nObjective: You know the target word: "${targetWord}". Your clue is: "${clue}". Guide the others to the target word subtly using your clue, pretending you are a Clue Holder. If the Imposters identify you as the Helper, they win!`;
+      return `Your Role: Helper 💡\nObjective: You know the target word: "${targetWord || 'TARGET_WORD_ERROR'}". Your clue is: "${clue || 'CLUE_ERROR'}". Guide the others to the target word subtly using your clue, pretending you are a Clue Holder. If the Imposters identify you as the Helper, they win!`;
     case "Imposter":
-      return `Your Role: Imposter 👺\nObjective: You know the target word: "${targetWord}". Blend in with the Clue Holders. Mislead others. Your main goal is to identify the Helper. If you correctly accuse the Helper, you win. If you are identified by the Communicator and Clue Holders, you lose. You have one chance to accuse someone of being the Helper.`;
+      return `Your Role: Imposter 👺\nObjective: You know the target word: "${targetWord || 'TARGET_WORD_ERROR'}". Blend in with the Clue Holders. Mislead others. Your main goal is to identify the Helper. If you correctly accuse the Helper, you win. If you are identified by the Communicator and Clue Holders, you lose. Your team has one chance to accuse someone of being the Helper.`;
     case "ClueHolder":
-      return `Your Role: Clue Holder 🧩\nObjective: You do NOT know the target word. Your clue is: "${clue}". Use your clue to help the group identify the target word. Work with the Communicator to find the Imposters.`;
+      return `Your Role: Clue Holder 🧩\nObjective: You do NOT know the target word. Your clue is: "${clue || 'CLUE_ERROR'}". Use your clue to help the group identify the target word. Work with the Communicator to find the Imposters.`;
     default:
       return "Role information not available.";
   }
 }
 
+// initialGameState is crucial for creating new game documents in Firestore
 export const initialGameState = (gameId: string, hostPlayer: Player): GameState => ({
   gameId,
-  players: [hostPlayer],
+  players: [hostPlayer], // Start with the host player
   status: "lobby",
-  words: [],
-  targetWord: "",
+  words: [], // Empty until game starts
+  targetWord: "", // Empty until game starts
   hostId: hostPlayer.id,
   accusationsMadeByImposters: 0,
   meetingsCalled: 0,
-  maxMeetings: 1, // Each Imposter effectively gets one chance, or one meeting for all.
+  maxMeetings: 1, // Max meetings per game (or per Imposter team combined)
+  winner: undefined, // Explicitly undefined
   gameLog: [`Game ${gameId} created by ${hostPlayer.name}.`],
-  chatMessages: [],
+  chatMessages: [], // Initialize as empty array
 });

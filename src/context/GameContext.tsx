@@ -2,154 +2,81 @@
 "use client";
 
 import type { ReactNode } from 'react';
-import React, { createContext, useContext, useReducer, useEffect, useState, useMemo } from 'react';
-import type { GameState, Action, Player } from '@/lib/types';
-import { initialGameState, generateShortId } from '@/lib/gameUtils'; // Ensure generateShortId is exported or defined here
-// useRouter import was present but not used directly in the provided snippet, can be removed if not needed elsewhere in this file.
-// import { useRouter } from 'next/navigation';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import { doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, arrayRemove, increment, runTransaction } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import type { GameState, Player, GameWord, ChatMessage, Role } from '@/lib/types';
+import { initialGameState, generateShortId, assignRolesAndClues } from '@/lib/gameUtils';
+import { generateWordsAndClues } from '@/ai/flows/generate-words-and-clues';
+import { useToast } from '@/hooks/use-toast';
 
 interface GameContextProps {
-  gameState: GameState | null; // Can be null until initialized
-  dispatch: React.Dispatch<Action>;
+  gameState: GameState | null;
   localPlayerId: string | null;
   setLocalPlayerId: (id: string | null) => void;
+  isLoading: boolean;
+  createGame: (username: string) => Promise<string | null>;
+  joinGame: (gameIdToJoin: string, username: string) => Promise<boolean>;
+  startGameAI: () => Promise<void>;
+  dispatch: (action: any) => Promise<void>; // Simplified dispatch for Firestore updates
+  sendChatMessage: (text: string) => Promise<void>;
+  accuseHelper: (accusedPlayerId: string) => Promise<void>;
+  leaveGame: () => Promise<void>;
+  callMeeting: () => Promise<void>;
+  updatePlayerInContext: (playerData: Partial<Player> & { id: string }) => Promise<void>;
 }
 
 const GameContext = createContext<GameContextProps | undefined>(undefined);
 
-const gameReducer = (state: GameState | null, action: Action): GameState | null => {
-  switch (action.type) {
-    case 'SET_GAME_STATE':
-      return action.payload; // Payload is the new, complete GameState or null
-    default:
-      // If state is null and action is not SET_GAME_STATE, this is likely an error or premature dispatch
-      if (!state) {
-        console.warn(`Action ${action.type} dispatched while game state is null.`);
-        return null;
-      }
-      // Proceed with other actions, assuming state is a valid GameState object
-      switch (action.type) {
-        case 'ADD_PLAYER':
-          if (state.players.find(p => p.id === action.payload.id)) return state;
-          return { ...state, players: [...state.players, action.payload] };
-        case 'REMOVE_PLAYER':
-          return { ...state, players: state.players.filter(p => p.id !== action.payload) };
-        case 'UPDATE_PLAYER':
-          return {
-            ...state,
-            players: state.players.map(p => p.id === action.payload.id ? { ...p, ...action.payload } : p),
-          };
-        case 'START_GAME':
-          return {
-            ...state,
-            status: 'role-reveal',
-            words: action.payload.words,
-            targetWord: action.payload.targetWord,
-            players: action.payload.playersWithRoles,
-            gameLog: [...state.gameLog, "Game started! Roles assigned."]
-          };
-        case 'SET_STATUS':
-          return { ...state, status: action.payload, gameLog: [...state.gameLog, `Game status changed to ${action.payload}`] };
-        case 'ADD_CHAT_MESSAGE':
-          return { ...state, chatMessages: [...state.chatMessages, action.payload] };
-        case 'ACCUSE_HELPER': {
-          const { accuserId, accusedPlayerId } = action.payload;
-          const accuser = state.players.find(p => p.id === accuserId);
-          const accusedPlayer = state.players.find(p => p.id === accusedPlayerId);
-          if (!accuser || !accusedPlayer || accuser.role !== 'Imposter') return state;
-
-          let winner: GameState['winner'] = undefined;
-          let logMessage = `${accuser.name} (Imposter) accused ${accusedPlayer.name} of being the Helper.`;
-          if (accusedPlayer.role === 'Helper') {
-            winner = 'Imposters';
-            logMessage += " Correct! Imposters win!";
-          } else {
-            winner = 'GoodTeam';
-            logMessage += " Incorrect! Imposters lose.";
-          }
-          return {
-            ...state,
-            status: 'finished',
-            winner,
-            gameLog: [...state.gameLog, logMessage],
-            accusationsMadeByImposters: state.accusationsMadeByImposters + 1,
-          };
-        }
-        case 'END_GAME':
-          return {
-            ...state,
-            status: 'finished',
-            winner: action.payload.winner,
-            gameLog: [...state.gameLog, `Game Over. ${action.payload.reason}`],
-          };
-        default:
-          return state;
-      }
-  }
-};
-
 export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNode, gameIdFromParams?: string }) => {
+  const [gameState, setGameState] = useState<GameState | null>(null);
   const [localPlayerId, setLocalPlayerIdState] = useState<string | null>(null);
-  const [gameState, dispatch] = useReducer(gameReducer, null); // Initialize gameState to null
-  const [isInitialized, setIsInitialized] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const { toast } = useToast();
 
-  // Effect 1: Initialize localPlayerId from localStorage (client-side only)
+  // Initialize localPlayerId from localStorage (this is client-side only)
   useEffect(() => {
-    const storedPlayerId = localStorage.getItem('dm_localPlayerId');
-    if (storedPlayerId) {
-      setLocalPlayerIdState(storedPlayerId);
-    } else {
-      const newPlayerId = generateShortId(8);
-      localStorage.setItem('dm_localPlayerId', newPlayerId);
-      setLocalPlayerIdState(newPlayerId);
+    if (typeof window !== 'undefined') {
+      const storedPlayerId = localStorage.getItem('dm_localPlayerId');
+      if (storedPlayerId) {
+        setLocalPlayerIdState(storedPlayerId);
+      } else {
+        const newPlayerId = generateShortId(10);
+        localStorage.setItem('dm_localPlayerId', newPlayerId);
+        setLocalPlayerIdState(newPlayerId);
+      }
     }
   }, []);
 
-  // Effect 2: Initialize gameState from localStorage or create new (client-side only, after localPlayerId is known)
+  // Subscribe to Firestore document for game state changes
   useEffect(() => {
-    if (localPlayerId === null) { // Wait for localPlayerId to be resolved
+    if (!gameIdFromParams) {
+      setGameState(null);
+      setIsLoading(false);
       return;
     }
-
-    let effectiveGameId = gameIdFromParams;
-    let loadedState: GameState | null = null;
-
-    if (effectiveGameId) {
-      const storedGame = localStorage.getItem(`dm_gameState_${effectiveGameId}`);
-      if (storedGame) {
-        try {
-          const parsedGame = JSON.parse(storedGame) as GameState;
-          if (parsedGame.gameId === effectiveGameId) {
-            loadedState = parsedGame;
-          }
-        } catch (error) {
-          console.error("Failed to parse stored game state:", error);
-          localStorage.removeItem(`dm_gameState_${effectiveGameId}`); // Clear corrupted data
-        }
+    
+    setIsLoading(true);
+    const gameDocRef = doc(db, "games", gameIdFromParams);
+    const unsubscribe = onSnapshot(gameDocRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setGameState(docSnap.data() as GameState);
+      } else {
+        setGameState(null);
+        toast({ title: "Game not found", description: "This game session does not exist or has ended.", variant: "destructive"});
       }
-    }
+      setIsLoading(false);
+    }, (error) => {
+      console.error("Error listening to game state:", error);
+      toast({ title: "Connection Error", description: "Could not connect to game session.", variant: "destructive"});
+      setIsLoading(false);
+      setGameState(null);
+    });
 
-    if (loadedState) {
-      dispatch({ type: 'SET_GAME_STATE', payload: loadedState });
-    } else {
-      const newGameId = effectiveGameId || generateShortId(6);
-      // Ensure localStorage access for username is guarded (though this effect is client-side)
-      const hostName = typeof window !== 'undefined' ? (localStorage.getItem('dm_username') || "Player") : "Player";
-      
-      const newGameState = initialGameState(newGameId, {
-        id: localPlayerId, // localPlayerId is guaranteed non-null here
-        name: hostName,
-        role: "Communicator",
-        isHost: true, // New game instance, this player becomes host
-        isAlive: true
-      });
-      dispatch({ type: 'SET_GAME_STATE', payload: newGameState });
-    }
-    setIsInitialized(true);
-  }, [localPlayerId, gameIdFromParams]);
+    return () => unsubscribe();
+  }, [gameIdFromParams, toast]);
 
-  const setLocalPlayerIdInternal = (id: string | null) => {
-    // This function is called by components, implying client-side context for localStorage.
+  const setLocalPlayerId = (id: string | null) => {
     if (typeof window !== 'undefined') {
       if (id) {
         localStorage.setItem('dm_localPlayerId', id);
@@ -160,50 +87,322 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     setLocalPlayerIdState(id);
   };
 
-  // Effect 3: Save gameState to localStorage when it changes (client-side only, after initialization)
-  useEffect(() => {
-    if (isInitialized && gameState && gameState.gameId && typeof window !== 'undefined') {
-      localStorage.setItem(`dm_gameState_${gameState.gameId}`, JSON.stringify(gameState));
+  const createGame = async (username: string): Promise<string | null> => {
+    if (!localPlayerId) {
+      toast({ title: "Error", description: "Player ID not initialized.", variant: "destructive"});
+      return null;
     }
-  }, [gameState, isInitialized]);
+    const newGameId = generateShortId(6).toUpperCase();
+    const hostPlayer: Player = {
+      id: localPlayerId,
+      name: username,
+      role: "Communicator", // Placeholder, will be reassigned
+      isHost: true,
+      isAlive: true,
+      hasCalledMeeting: false,
+    };
+    const newGame = initialGameState(newGameId, hostPlayer);
+    
+    try {
+      await setDoc(doc(db, "games", newGameId), newGame);
+      return newGameId;
+    } catch (error) {
+      console.error("Error creating game:", error);
+      toast({ title: "Error Creating Game", description: (error as Error).message, variant: "destructive"});
+      return null;
+    }
+  };
 
-  // Effect 4: Listen for storage changes from other tabs (client-side only, after initialization)
-  useEffect(() => {
-    if (!isInitialized || !gameIdFromParams || typeof window === 'undefined') return;
-
-    const handleStorageChange = (event: StorageEvent) => {
-      if (event.key === `dm_gameState_${gameIdFromParams}` && event.newValue) {
-        try {
-          const newGameStateFromStorage = JSON.parse(event.newValue) as GameState;
-          // Avoid dispatching if the state is identical to prevent potential loops
-          if (JSON.stringify(newGameStateFromStorage) !== JSON.stringify(gameState)) {
-             dispatch({ type: 'SET_GAME_STATE', payload: newGameStateFromStorage });
-          }
-        } catch (error) {
-          console.error("Error parsing game state from storage event:", error);
+  const joinGame = async (gameIdToJoin: string, username: string): Promise<boolean> => {
+    if (!localPlayerId) {
+      toast({ title: "Error", description: "Player ID not initialized.", variant: "destructive"});
+      return false;
+    }
+    const gameDocRef = doc(db, "games", gameIdToJoin);
+    try {
+      return await runTransaction(db, async (transaction) => {
+        const gameSnap = await transaction.get(gameDocRef);
+        if (!gameSnap.exists()) {
+          toast({ title: "Game Not Found", variant: "destructive" });
+          return false;
         }
+
+        const currentGameData = gameSnap.data() as GameState;
+        if (currentGameData.players.find(p => p.id === localPlayerId)) {
+          // Already in lobby
+          return true;
+        }
+        if (currentGameData.players.length >= 5) {
+          toast({ title: "Lobby Full", variant: "destructive" });
+          return false;
+        }
+        if (currentGameData.status !== 'lobby') {
+          toast({ title: "Game in Progress", description: "Cannot join a game that has already started.", variant: "destructive" });
+          return false;
+        }
+
+        const joiningPlayer: Player = {
+          id: localPlayerId,
+          name: username,
+          role: "Communicator", // Placeholder
+          isAlive: true,
+          hasCalledMeeting: false,
+        };
+        transaction.update(gameDocRef, {
+          players: arrayUnion(joiningPlayer)
+        });
+        return true;
+      });
+    } catch (error) {
+      console.error("Error joining game:", error);
+      toast({ title: "Error Joining Game", description: (error as Error).message, variant: "destructive"});
+      return false;
+    }
+  };
+
+  const startGameAI = async () => {
+    if (!gameState || !localPlayerId || gameState.hostId !== localPlayerId) {
+      toast({ title: "Error", description: "Only the host can start the game.", variant: "destructive" });
+      return;
+    }
+    if (gameState.players.length !== 5) {
+      toast({ title: "Not enough players", description: "Need 5 players to start.", variant: "destructive" });
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      toast({ title: "Starting Game...", description: "Generating words and clues with AI..." });
+      const aiData = await generateWordsAndClues({ numberOfWords: 9 }); 
+      if (!aiData || !aiData.words || aiData.words.length === 0) {
+        throw new Error("AI failed to generate words.");
       }
+      
+      const { updatedPlayers, gameWords } = assignRolesAndClues(gameState.players, aiData);
+      
+      const gameDocRef = doc(db, "games", gameState.gameId);
+      await updateDoc(gameDocRef, {
+        status: 'role-reveal',
+        words: gameWords,
+        targetWord: aiData.targetWord,
+        players: updatedPlayers, // This now includes roles and clues
+        gameLog: arrayUnion(`Game started by ${gameState.players.find(p=>p.isHost)?.name}. Roles assigned.`),
+        chatMessages: [], // Reset chat messages
+        accusationsMadeByImposters: 0, // Reset accusations
+        meetingsCalled: 0, // Reset meetings
+      });
+      // Firestore onSnapshot will update gameState and setIsLoading(false)
+    } catch (error) {
+      console.error("Failed to start game:", error);
+      toast({ title: "Error Starting Game", description: (error as Error).message || "Could not start the game.", variant: "destructive" });
+      setIsLoading(false);
+    }
+  };
+
+  // Generic dispatch, can be expanded or replaced by more specific functions
+  const dispatch = async (action: { type: string, payload: any }) => {
+    if (!gameState) return;
+    const gameDocRef = doc(db, "games", gameState.gameId);
+    try {
+      switch (action.type) {
+        case 'SET_STATUS':
+          await updateDoc(gameDocRef, { 
+            status: action.payload,
+            gameLog: arrayUnion(`Game status changed to ${action.payload}`)
+          });
+          break;
+        // Add other cases as needed
+        default:
+          console.warn("Unhandled action type:", action.type);
+      }
+    } catch (error) {
+      console.error("Error dispatching action:", error);
+      toast({ title: "Error", description: "Could not update game.", variant: "destructive" });
+    }
+  };
+  
+  const sendChatMessage = async (text: string) => {
+    if (!gameState || !localPlayerId) return;
+    const localPlayer = gameState.players.find(p => p.id === localPlayerId);
+    if (!localPlayer) {
+      toast({title: "Error", description: "Player not found in game.", variant: "destructive"});
+      return;
+    }
+    if (localPlayer.role === 'Communicator') {
+      toast({title: "Communicators cannot chat", description: "You are observing.", variant: "default"});
+      return;
+    }
+
+    const newMessage: ChatMessage = {
+      id: generateShortId(10),
+      playerId: localPlayer.id,
+      playerName: localPlayer.name,
+      text: text,
+      timestamp: Date.now(), // Consider serverTimestamp for better accuracy if needed
     };
+    const gameDocRef = doc(db, "games", gameState.gameId);
+    try {
+      await updateDoc(gameDocRef, {
+        chatMessages: arrayUnion(newMessage)
+      });
+    } catch (error) {
+      console.error("Error sending chat message:", error);
+      toast({ title: "Error", description: "Could not send message.", variant: "destructive" });
+    }
+  };
 
-    window.addEventListener('storage', handleStorageChange);
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-    };
-  }, [gameState, gameIdFromParams, dispatch, isInitialized]);
+  const accuseHelper = async (accusedPlayerId: string) => {
+    if (!gameState || !localPlayerId) return;
+    const accuser = gameState.players.find(p => p.id === localPlayerId);
+    const accusedPlayer = gameState.players.find(p => p.id === accusedPlayerId);
 
+    if (!accuser || !accusedPlayer ) {
+      toast({title: "Invalid Action", description: "Problem with accusation data.", variant: "destructive"});
+      return;
+    }
+    if (accuser.role !== 'Imposter') {
+      toast({title: "Invalid Action", description: "Only Imposters can accuse the Helper.", variant: "destructive"});
+      return;
+    }
+    // Check if this imposter's team has already made their one accusation
+    if (gameState.accusationsMadeByImposters >= 1) { // Max 1 accusation for the Imposter team
+       toast({title: "Accusation Limit Reached", description: "Your team has already made its one accusation.", variant: "destructive"});
+       return;
+    }
 
+    let winner: GameState['winner'] = undefined;
+    let logMessage = `${accuser.name} (Imposter) accused ${accusedPlayer.name} of being the Helper.`;
+    if (accusedPlayer.role === 'Helper') {
+      winner = 'Imposters';
+      logMessage += " Correct! Imposters win!";
+    } else {
+      winner = 'GoodTeam'; // Imposters lose if they guess wrong
+      logMessage += " Incorrect! The Imposters' guess was wrong. The Good Team wins!";
+    }
+    
+    const gameDocRef = doc(db, "games", gameState.gameId);
+    try {
+      await updateDoc(gameDocRef, {
+        status: 'finished',
+        winner: winner,
+        gameLog: arrayUnion(logMessage),
+        accusationsMadeByImposters: increment(1) // Increment regardless of outcome, for team limit
+      });
+    } catch (error) {
+      console.error("Error processing accusation:", error);
+      toast({ title: "Error", description: "Could not process accusation.", variant: "destructive" });
+    }
+  };
+  
+  const leaveGame = async () => {
+    if (!gameState || !localPlayerId) return;
+    const gameDocRef = doc(db, "games", gameState.gameId);
+    try {
+      const playerToRemove = gameState.players.find(p => p.id === localPlayerId);
+      if (playerToRemove) {
+        // Atomically remove the player
+        await runTransaction(db, async (transaction) => {
+          const gameSnap = await transaction.get(gameDocRef);
+          if (!gameSnap.exists()) throw "Game not found";
+          
+          const currentPlayers = gameSnap.data().players as Player[];
+          const updatedPlayers = currentPlayers.filter(p => p.id !== localPlayerId);
+
+          if (updatedPlayers.length === 0) {
+            // If last player leaves, delete the game
+            transaction.delete(gameDocRef);
+          } else {
+            // If host leaves, assign a new host
+            let newHostId = gameSnap.data().hostId;
+            if (playerToRemove.isHost && updatedPlayers.length > 0) {
+              newHostId = updatedPlayers[0].id; // Assign to the next player
+              const newHostUpdatedPlayers = updatedPlayers.map((p,idx) => idx === 0 ? {...p, isHost: true} : p);
+              transaction.update(gameDocRef, { players: newHostUpdatedPlayers, hostId: newHostId, gameLog: arrayUnion(`${playerToRemove.name} (Host) left. ${updatedPlayers[0].name} is the new host.`) });
+            } else {
+              transaction.update(gameDocRef, { players: updatedPlayers, gameLog: arrayUnion(`${playerToRemove.name} left the game.`) });
+            }
+          }
+        });
+      }
+      setGameState(null); // Clear local state immediately, redirect handled by page
+    } catch (error) {
+      console.error("Error leaving game:", error);
+      toast({ title: "Error", description: `Could not leave game: ${(error as Error).message}`, variant: "destructive" });
+    }
+  };
+
+  const callMeeting = async () => {
+    if (!gameState || !localPlayerId) return;
+    const player = gameState.players.find(p => p.id === localPlayerId);
+    
+    if (!player) {
+      toast({ title: "Error", description: "Player not found.", variant: "destructive" });
+      return;
+    }
+    if (player.hasCalledMeeting) {
+      toast({ title: "Meeting Cooldown", description: "You've already called a meeting this game.", variant: "default" });
+      return;
+    }
+    if (gameState.meetingsCalled >= gameState.maxMeetings) {
+      toast({ title: "Meeting Limit Reached", description: "No more emergency meetings can be called this game.", variant: "default" });
+      return;
+    }
+    if (gameState.status === 'meeting') {
+      toast({ title: "Meeting in Progress", description: "A meeting is already underway.", variant: "default" });
+      return;
+    }
+
+    const gameDocRef = doc(db, "games", gameState.gameId);
+    const updatedPlayers = gameState.players.map(p => p.id === localPlayerId ? {...p, hasCalledMeeting: true} : p);
+    try {
+      await updateDoc(gameDocRef, {
+        status: 'meeting',
+        meetingsCalled: increment(1),
+        players: updatedPlayers,
+        gameLog: arrayUnion(`${player.name} called an emergency meeting. All players gather! (This phase is for Imposters to accuse the Helper).`)
+      });
+      // No automatic timeout for meeting - it ends when an action is taken (e.g., accusation) or manually (not implemented yet)
+    } catch (error) {
+      console.error("Error calling meeting:", error);
+      toast({ title: "Error", description: "Could not call meeting.", variant: "destructive" });
+    }
+  };
+  
+  const updatePlayerInContext = async (playerData: Partial<Player> & { id: string }) => {
+    if (!gameState || !gameState.players.find(p => p.id === playerData.id)) {
+      toast({title: "Error", description: "Cannot update player: Game or player not found.", variant: "destructive"});
+      return;
+    }
+    const gameDocRef = doc(db, "games", gameState.gameId);
+    // This is a bit naive, as it replaces the entire players array.
+    // For specific updates like 'isAlive', a more targeted update might be better
+    // if concurrent updates are frequent. But for most player-specific attributes, this is fine.
+    const updatedPlayers = gameState.players.map(p => p.id === playerData.id ? { ...p, ...playerData } : p);
+    try {
+      await updateDoc(gameDocRef, { players: updatedPlayers });
+    } catch (error) {
+      console.error("Error updating player:", error);
+      toast({ title: "Error", description: "Could not update player data.", variant: "destructive" });
+    }
+  };
+
+  // Memoize context value to prevent unnecessary re-renders of consumers
   const contextValue = useMemo(() => ({
-    gameState: isInitialized ? gameState : null,
-    dispatch,
+    gameState,
     localPlayerId,
-    setLocalPlayerId: setLocalPlayerIdInternal
-  }), [gameState, localPlayerId, isInitialized]);
-
-  // Optional: Render children only after initialization, or show a loader.
-  // For simplicity, we allow children to render; they must handle `gameState === null`.
-  // if (!isInitialized && gameIdFromParams) {
-  //   return <div className="flex flex-col items-center justify-center flex-grow"><p>Loading Game Context...</p></div>;
-  // }
+    setLocalPlayerId,
+    isLoading,
+    createGame,
+    joinGame,
+    startGameAI,
+    dispatch,
+    sendChatMessage,
+    accuseHelper,
+    leaveGame,
+    callMeeting,
+    updatePlayerInContext,
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [gameState, localPlayerId, isLoading, toast]); // Dependencies that, when changed, should recreate the context object. Async functions that don't change based on these can be omitted if wrapped in useCallback.
 
   return (
     <GameContext.Provider value={contextValue}>

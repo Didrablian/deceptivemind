@@ -1,6 +1,7 @@
+
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useGame } from '@/context/GameContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,13 +9,10 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import type { Player, GameWord, ChatMessage } from '@/lib/types';
+import type { Player, GameWord } from '@/lib/types'; // ChatMessage is part of GameState now
 import { Send, Users, ShieldAlert, HelpCircle, Eye, MessageSquare, Megaphone, Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { generateShortId } from '@/lib/gameUtils';
-
-// Mock AI call for accusation validation - in real scenario, this might be complex or not needed if game state tracks truth
-// For this game, the game state already knows the helper.
+// generateShortId is not needed here, messages are created in context
 
 const WordDisplay: React.FC<{ word: GameWord, player: Player }> = ({ word, player }) => {
   const knowsTarget = player.role === 'Helper' || player.role === 'Imposter';
@@ -30,8 +28,6 @@ const WordDisplay: React.FC<{ word: GameWord, player: Player }> = ({ word, playe
 
 const PlayerCard: React.FC<{ player: Player, isLocalPlayer: boolean, onAccuse?: (playerId: string) => void, localPlayerRole?: Player['role'] }> = ({ player, isLocalPlayer, onAccuse, localPlayerRole }) => {
   let icon;
-  // Only show icons for self, or if game is over (handled in GameOverScreen)
-  // During game, players don't know others' roles.
   if (isLocalPlayer) {
     switch (player.role) {
       case 'Communicator': icon = <Eye className="w-4 h-4 text-blue-500" />; break;
@@ -40,7 +36,7 @@ const PlayerCard: React.FC<{ player: Player, isLocalPlayer: boolean, onAccuse?: 
       case 'ClueHolder': icon = <MessageSquare className="w-4 h-4 text-yellow-500" />; break;
     }
   } else {
-    icon = <Users className="w-4 h-4 text-muted-foreground" />; // Generic icon for other players
+    icon = <Users className="w-4 h-4 text-muted-foreground" />;
   }
 
   return (
@@ -59,7 +55,7 @@ const PlayerCard: React.FC<{ player: Player, isLocalPlayer: boolean, onAccuse?: 
             <AlertDialogHeader>
               <AlertDialogTitle>Accuse {player.name} of being the Helper?</AlertDialogTitle>
               <AlertDialogDescription>
-                Imposters get one chance to correctly identify the Helper.
+                Imposters get one chance per team to correctly identify the Helper.
                 If you are wrong, your team loses immediately. This action is final.
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -76,73 +72,46 @@ const PlayerCard: React.FC<{ player: Player, isLocalPlayer: boolean, onAccuse?: 
 
 
 export default function GameplayScreen() {
-  const { gameState, dispatch, localPlayerId } = useGame();
+  const { gameState, localPlayerId, sendChatMessage, accuseHelper, callMeeting, isLoading, updatePlayerInContext } = useGame();
   const [chatInput, setChatInput] = useState('');
   const { toast } = useToast();
-  const chatScrollRef = React.useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Scroll to bottom of chat on new message
     if (chatScrollRef.current) {
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
     }
   }, [gameState?.chatMessages]);
 
-
-  if (!gameState || !localPlayerId) return <Loader2 className="h-12 w-12 animate-spin text-primary m-auto" />;
+  if (isLoading || !gameState || !localPlayerId) {
+    return <div className="flex justify-center items-center h-full"><Loader2 className="h-12 w-12 animate-spin text-primary m-auto" /></div>;
+  }
 
   const localPlayer = gameState.players.find(p => p.id === localPlayerId);
-  if (!localPlayer) return <p>Error: Local player data not found.</p>;
+  if (!localPlayer) {
+    // This case should ideally be handled by redirecting if player is not in game
+    return <p className="text-center text-destructive p-4">Error: Local player data not found in game. You might have been removed or an error occurred.</p>;
+  }
 
-  const handleSendChat = () => {
+  const handleSendChat = async () => {
     if (!chatInput.trim()) return;
-    const newMessage: ChatMessage = {
-      id: generateShortId(10),
-      playerId: localPlayer.id,
-      playerName: localPlayer.name,
-      text: chatInput,
-      timestamp: Date.now(),
-    };
-    dispatch({ type: 'ADD_CHAT_MESSAGE', payload: newMessage });
+    await sendChatMessage(chatInput.trim());
     setChatInput('');
   };
 
-  const handleAccuseHelper = (accusedPlayerId: string) => {
+  const handleAccuseHelper = async (accusedPlayerId: string) => {
     if (localPlayer.role !== 'Imposter') {
       toast({title: "Invalid Action", description: "Only Imposters can accuse the Helper.", variant: "destructive"});
       return;
     }
-    if (gameState.accusationsMadeByImposters >= 1 && gameState.players.filter(p=>p.role === 'Imposter').length === 1) { // Simplified: 1 accusation per game or per imposter team
-       toast({title: "Accusation Limit Reached", description: "Your team has already made an accusation.", variant: "destructive"});
-       return;
-    }
-     if (gameState.accusationsMadeByImposters >= 2 && gameState.players.filter(p=>p.role === 'Imposter').length === 2) { 
-       toast({title: "Accusation Limit Reached", description: "Your team has already made an accusation.", variant: "destructive"});
-       return;
-    }
-
-
-    dispatch({ type: 'ACCUSE_HELPER', payload: { accuserId: localPlayer.id, accusedPlayerId } });
-    // Game over logic is handled in the reducer based on this dispatch.
+    // Accusation limit logic is now within the accuseHelper context function
+    await accuseHelper(accusedPlayerId);
   };
   
-  const handleCallMeeting = () => {
-    if (localPlayer.hasCalledMeeting || gameState.meetingsCalled >= gameState.maxMeetings) {
-      toast({ title: "Meeting Limit", description: "You cannot call another meeting or the limit is reached.", variant: "destructive" });
-      return;
-    }
-    // For now, just log it. Voting/meeting sub-state would be complex for scaffold.
-    dispatch({ type: 'SET_STATUS', payload: 'meeting'}); // Placeholder
-    // Update player meeting status and game meeting count
-    // This part is simplified. Real voting needs more state.
-    dispatch({ type: 'UPDATE_PLAYER', payload: { id: localPlayer.id, hasCalledMeeting: true }});
-    // In a real game, you'd enter a voting phase. Here, we'll just note it and go back to 'playing' after a toast.
-    toast({ title: "Emergency Meeting Called!", description: `${localPlayer.name} called a meeting. Discuss and decide who to vote out!`});
-    setTimeout(() => {
-        if(gameState.status === 'meeting') dispatch({ type: 'SET_STATUS', payload: 'playing'}); // Go back to playing after a bit for demo
-    }, 5000);
+  const handleCallMeeting = async () => {
+    // Logic for disabling button and conditions is now handled by context or derived from gameState
+    await callMeeting();
   };
-
 
   return (
     <div className="flex flex-col lg:flex-row gap-4 h-full flex-grow p-1 sm:p-4 bg-background rounded-lg shadow-inner">
@@ -171,7 +140,9 @@ export default function GameplayScreen() {
                 <Megaphone className="mr-2 h-4 w-4" /> Call Emergency Meeting
             </Button>
             {(localPlayer.hasCalledMeeting || gameState.meetingsCalled >= gameState.maxMeetings) && (
-                <p className="text-xs text-muted-foreground text-center mt-1">Meeting limit reached.</p>
+                <p className="text-xs text-muted-foreground text-center mt-1">
+                  {localPlayer.hasCalledMeeting ? "You've called a meeting." : "Meeting limit reached."}
+                </p>
             )}
         </div>
       </Card>

@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useEffect, useState } from 'react';
@@ -8,10 +9,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import type { Player } from '@/lib/types';
 import { Loader2, Users, Play, Copy, LogOut } from 'lucide-react';
-import { generateWordsAndClues as callGenerateWordsAndCluesAI } from '@/ai/flows/generate-words-and-clues';
-import { assignRolesAndClues } from '@/lib/gameUtils';
 
 const MAX_PLAYERS = 5;
 
@@ -19,78 +17,29 @@ export default function LobbyPage() {
   const router = useRouter();
   const params = useParams();
   const gameId = Array.isArray(params.gameId) ? params.gameId[0] : params.gameId;
-  const { gameState, dispatch, localPlayerId } = useGame();
+  const { gameState, localPlayerId, isLoading, startGameAI, leaveGame } = useGame();
   const { toast } = useToast();
   const [isStartingGame, setIsStartingGame] = useState(false);
-  const [isClient, setIsClient] = useState(false);
 
+  // Redirect to game page if game status changes from lobby
   useEffect(() => {
-    setIsClient(true);
-  }, []);
-
-  // Effect for new player joining (workaround for no backend)
-  useEffect(() => {
-    if (isClient && gameId && localPlayerId && gameState) {
-      const joiningPlayerData = localStorage.getItem(`dm_joining_player_${gameId}`);
-      if (joiningPlayerData) {
-        try {
-          const joiningPlayer = JSON.parse(joiningPlayerData) as Player;
-          // Only add if it's the current local player trying to join
-          // and they are not already in the player list
-          if (joiningPlayer.id === localPlayerId && !gameState.players.find(p => p.id === localPlayerId)) {
-            if (gameState.players.length < MAX_PLAYERS) {
-              dispatch({ type: 'ADD_PLAYER', payload: joiningPlayer });
-              toast({ title: "Joined Lobby", description: `Welcome, ${joiningPlayer.name}!` });
-            } else {
-              toast({ title: "Lobby Full", description: "This lobby is already full.", variant: "destructive" });
-              router.push('/'); // Redirect if lobby is full
-            }
-          }
-        } catch (e) {
-          console.error("Error parsing joining player data", e);
-        } finally {
-          localStorage.removeItem(`dm_joining_player_${gameId}`);
-        }
-      }
+    if (gameState && gameState.status !== "lobby" && gameState.status !== "finished" /* allow staying if game just finished */) {
+      router.push(`/game/${gameState.gameId}`);
     }
-  }, [isClient, gameId, localPlayerId, gameState, dispatch, toast, router]);
-
+  }, [gameState, router]);
 
   const handleStartGame = async () => {
-    if (!gameState || gameState.players.length !== MAX_PLAYERS) {
-      toast({ title: "Not enough players", description: `Need ${MAX_PLAYERS} players to start. Currently ${gameState?.players.length || 0}.`, variant: "destructive" });
+    if (!gameState || !localPlayerId || gameState.hostId !== localPlayerId) {
+      toast({ title: "Not Host", description: "Only the host can start the game.", variant: "destructive" });
       return;
     }
-    if (localPlayerId !== gameState.hostId) {
-      toast({ title: "Only host can start", description: "Only the game host can start the game.", variant: "destructive" });
+    if (gameState.players.length !== MAX_PLAYERS) {
+      toast({ title: "Not Enough Players", description: `Need ${MAX_PLAYERS} players to start. Currently ${gameState.players.length}.`, variant: "destructive" });
       return;
     }
-
     setIsStartingGame(true);
-    try {
-      toast({ title: "Starting Game...", description: "Generating words and clues with AI..." });
-      const aiData = await callGenerateWordsAndCluesAI({ numberOfWords: 9 });
-      if (!aiData || !aiData.words || aiData.words.length === 0) {
-        throw new Error("AI failed to generate words.");
-      }
-      
-      const { updatedPlayers, gameWords } = assignRolesAndClues(gameState.players, aiData);
-      
-      dispatch({
-        type: 'START_GAME',
-        payload: {
-          words: gameWords,
-          targetWord: aiData.targetWord,
-          playersWithRoles: updatedPlayers,
-        }
-      });
-      
-      router.push(`/game/${gameId}`);
-    } catch (error) {
-      console.error("Failed to start game:", error);
-      toast({ title: "Error Starting Game", description: (error as Error).message || "Could not start the game. Please try again.", variant: "destructive" });
-      setIsStartingGame(false);
-    }
+    await startGameAI(); // This function now handles toasts for success/failure
+    setIsStartingGame(false); // startGameAI will change status, useEffect will redirect
   };
 
   const copyGameId = () => {
@@ -100,18 +49,13 @@ export default function LobbyPage() {
       .catch(() => toast({ title: "Copy Failed", description: "Could not copy Game ID.", variant: "destructive" }));
   };
   
-  const handleLeaveLobby = () => {
-    if (localPlayerId && gameState) {
-      // If host leaves, in a real app, you'd handle host migration or game dissolution.
-      // For this demo, if host leaves, other players might be stuck.
-      // We'll just remove the player locally and redirect.
-      dispatch({ type: 'REMOVE_PLAYER', payload: localPlayerId });
-    }
+  const handleLeaveLobby = async () => {
+    await leaveGame(); // leaveGame will update Firestore
     router.push('/');
     toast({ title: "Left Lobby", description: "You have left the game lobby." });
   };
 
-  if (!isClient || !gameState) {
+  if (isLoading || !gameState && gameId) { // if gameId exists but gameState is null, it's loading or not found
     return (
       <div className="flex flex-col items-center justify-center flex-grow">
         <Loader2 className="h-16 w-16 animate-spin text-primary mb-4" />
@@ -119,7 +63,29 @@ export default function LobbyPage() {
       </div>
     );
   }
+
+  if (!gameState) {
+     // This can happen if gameIdFromParams was undefined, or Firestore listener found no doc
+    return (
+      <div className="flex flex-col items-center justify-center flex-grow">
+        <p className="text-xl text-destructive">Lobby not found or error loading game.</p>
+        <Button onClick={() => router.push('/')} className="mt-4">Go Home</Button>
+      </div>
+    );
+  }
   
+  // If game has started and user is trying to access lobby directly
+  if (gameState.status !== 'lobby') {
+    router.push(`/game/${gameId}`);
+    return (
+        <div className="flex flex-col items-center justify-center flex-grow">
+            <Loader2 className="h-16 w-16 animate-spin text-primary mb-4" />
+            <p className="text-xl text-muted-foreground">Redirecting to game...</p>
+        </div>
+    );
+  }
+
+
   const canStart = gameState.players.length === MAX_PLAYERS && localPlayerId === gameState.hostId;
 
   return (
@@ -159,7 +125,7 @@ export default function LobbyPage() {
               ))}
             </ul>
           ) : (
-            <p className="text-center text-muted-foreground py-10">No players yet. Be the first to join!</p>
+            <p className="text-center text-muted-foreground py-10">No players yet. Share the Game ID!</p>
           )}
         </ScrollArea>
       </CardContent>
