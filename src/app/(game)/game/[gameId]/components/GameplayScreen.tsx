@@ -75,8 +75,8 @@ const WordDisplay: React.FC<{
 const PlayerCard: React.FC<{
   player: Player,
   isLocalPlayer: boolean,
-  localPlayerRole: Role | undefined, // Role of the person viewing the card
-  isAccuserRole: boolean, // True if the localPlayer is an Imposter during post-guess
+  localPlayerRole: Role | undefined,
+  isAccuserRole: boolean,
   onAccuseHelper?: (playerId: string) => void,
   gameStatus: GameState['status']
 }> = ({ player, isLocalPlayer, localPlayerRole, isAccuserRole, onAccuseHelper, gameStatus }) => {
@@ -90,14 +90,13 @@ const PlayerCard: React.FC<{
   } else if (gameStatus === 'finished') {
     roleIsVisible = true;
   } else if (player.isRevealedImposter && player.role === 'Imposter') {
-    roleIsVisible = true; // Everyone sees a revealed imposter's role
+    roleIsVisible = true; 
   } else if (gameStatus === 'post-guess-reveal') {
-    // If the viewing player (localPlayer) is NOT an Imposter, they see all roles.
     if (localPlayerRole && localPlayerRole !== 'Imposter') {
       roleIsVisible = true;
     }
-    // If localPlayerRole IS 'Imposter', roleIsVisible remains false for other non-communicator, non-revealed players.
   }
+
 
   let icon;
   if (roleIsVisible) {
@@ -109,7 +108,7 @@ const PlayerCard: React.FC<{
       default: icon = <Users className="w-4 h-4 text-muted-foreground" />; break;
     }
   } else {
-    icon = <Users className="w-4 h-4 text-muted-foreground" />; // Generic icon if role is hidden
+    icon = <Users className="w-4 h-4 text-muted-foreground" />; 
   }
 
   return (
@@ -120,16 +119,10 @@ const PlayerCard: React.FC<{
         {isLocalPlayer && <Badge variant="outline">(You)</Badge>}
         
         {(() => {
-          // Precedence: Revealed Imposter > General Role Visibility > Nothing
           if (player.isRevealedImposter && player.role === 'Imposter' && !isLocalPlayer) {
-            // This badge is shown to others when an imposter is revealed (e.g. during post-guess)
-            // It is also covered by roleIsVisible for the imposter themselves.
-            return <Badge variant="destructive" className="text-xs">Imposter</Badge>;
+             return <Badge variant="destructive" className="text-xs">Imposter</Badge>;
           }
-          if (roleIsVisible) {
-             // For Communicator, this shows their role.
-             // For local player, this shows their role.
-             // For others in 'finished' or 'post-guess-reveal' (if local not imposter), shows role.
+          if (roleIsVisible && player.role) { // Check if player.role is defined
             return <Badge variant="secondary" className="text-xs">{player.role}</Badge>;
           }
           return null;
@@ -178,7 +171,7 @@ export default function GameplayScreen() {
 
   const localPlayer = gameState.players.find(p => p.id === localPlayerId);
   if (!localPlayer) {
-    return <p className="text-center text-destructive p-4">Error: Local player data not found.</p>;
+    return <div className="text-center text-destructive p-4">Error: Local player data not found.</div>;
   }
 
   const handleSendChat = async () => {
@@ -253,13 +246,13 @@ export default function GameplayScreen() {
             <div>Status: <Badge variant={gameState.status === 'finished' ? 'default' : 'secondary'}>{gameState.status.replace('-', ' ').toUpperCase()}</Badge></div>
             <div>Eliminations: {gameState.eliminationCount}/{gameState.maxEliminations}</div>
             {gameState.status === 'post-guess-reveal' && localPlayer.role === 'Imposter' && (
-              <div className="text-accent font-semibold mt-2">Your team guessed the word! Now, identify the Helper from the players list.</div>
+              <div className="text-accent font-semibold mt-2">The players guessed the word! Now, identify the Helper from the players list.</div>
             )}
             {gameState.status === 'post-guess-reveal' && localPlayer.role !== 'Imposter' && (
-              <div className="text-primary font-semibold mt-2">The team guessed the word! Waiting for Imposters to accuse the Helper...</div>
+              <div className="text-primary font-semibold mt-2">Your team guessed the word! Waiting for Imposters to identify the Helper...</div>
             )}
              {gameState.status === 'post-guess-reveal' && localPlayer.role === 'Helper' && (
-              <div className="text-green-600 font-semibold mt-2">The team found the word! Stay hidden, they're trying to find you!</div>
+              <div className="text-green-600 font-semibold mt-2">Your team found the word! Stay hidden, the Imposters are trying to find you!</div>
             )}
           </div>
         </CardFooter>
@@ -303,7 +296,7 @@ export default function GameplayScreen() {
              </Button>
           )}
           {localPlayer.role === 'Communicator' && (gameState.status === 'discussion' || gameState.status === 'word-elimination') && (
-            <p className="text-xs text-center text-muted-foreground w-full">As Communicator, click the <Trash2 className="inline h-3 w-3"/> on a word to eliminate it.</p>
+            <div className="text-xs text-center text-muted-foreground w-full">As Communicator, click the <Trash2 className="inline h-3 w-3"/> on a word to eliminate it.</div>
           )}
         </CardFooter>
       </Card>
@@ -346,5 +339,3 @@ export default function GameplayScreen() {
     </div>
   );
 }
-
-    

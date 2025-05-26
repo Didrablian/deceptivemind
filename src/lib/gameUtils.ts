@@ -12,36 +12,38 @@ export function generateShortId(length: number = 6): string {
 
 export function assignRolesAndClues(
   players: Player[],
-  aiData: { targetWord: string; words: string[]; helperClue: string; clueHolderClue: string }
+  aiData: { targetWord: string; words: string[]; helperClue: string; clueHolderClue: string },
+  minPlayers: number,
+  maxPlayers: number
 ): { updatedPlayers: Player[]; gameWords: GameWord[] } {
   const playerCount = players.length;
-  if (playerCount < 4 || playerCount > 8) {
+  if (playerCount < minPlayers || playerCount > maxPlayers) {
     console.error("Role assignment called with unsupported player count:", playerCount);
-    // Fallback to a default or handle error appropriately
-    return { updatedPlayers: players.map(p => ({...p, role: "ClueHolder", score: p.score || 0})), gameWords: [] };
+    return { updatedPlayers: players.map(p => ({...p, role: "ClueHolder", score: p.score || 0, clue: null, isRevealedImposter: false, isAlive: true, isHost: p.isHost || false})), gameWords: [] };
   }
 
-  let rolesToAssign: Role[];
+  let rolesToAssign: Role[] = [];
   const imposterCount = playerCount >= 6 ? 2 : 1;
   const clueHolderCount = playerCount - 1 /* Communicator */ - 1 /* Helper */ - imposterCount;
 
-  rolesToAssign = ["Communicator", "Helper"];
+  rolesToAssign.push("Communicator");
+  rolesToAssign.push("Helper");
   for (let i = 0; i < imposterCount; i++) rolesToAssign.push("Imposter");
   for (let i = 0; i < clueHolderCount; i++) rolesToAssign.push("ClueHolder");
-
-  // Shuffle roles to ensure randomness in assignment to shuffled players
+  
+  // Ensure players list is already shuffled before calling this function if needed, or shuffle here.
+  // For now, assume `players` param is already shuffled if that's intended.
   const shuffledRoles = [...rolesToAssign].sort(() => Math.random() - 0.5);
-  const shuffledPlayers = [...players].sort(() => Math.random() - 0.5);
 
 
-  const updatedPlayers = shuffledPlayers.map((player, index) => {
-    const role = shuffledRoles[index];
+  const updatedPlayers = players.map((player, index) => {
+    const role = shuffledRoles[index % shuffledRoles.length]; // Use modulo for safety, though lengths should match
     let clue: string | null = null;
 
     if (role === "Helper") {
       clue = aiData.helperClue;
     } else if (role === "ClueHolder") {
-      clue = aiData.clueHolderClue; // All ClueHolders get the same clue from AI
+      clue = aiData.clueHolderClue; 
     }
 
     return {
@@ -49,8 +51,7 @@ export function assignRolesAndClues(
       role,
       clue: clue,
       isAlive: true,
-      hasCalledMeeting: false, // This might be obsolete
-      score: player.score || 0, // Preserve existing score or default to 0
+      score: player.score || 0, 
       isRevealedImposter: false,
     };
   });
@@ -63,12 +64,13 @@ export function assignRolesAndClues(
 
   if (aiData.words.length > 0 && !gameWords.find(w => w.isTarget)) {
       if (gameWords.length > 0) {
-        gameWords[0].isTarget = true;
-        console.warn("Target word from AI was not in the word list. Fallback applied to first word.");
+        gameWords[0].isTarget = true; // Fallback if AI target word isn't in its own list
+        console.warn("Target word from AI was not in the word list. Fallback applied to first word:", aiData.targetWord, "New target:", gameWords[0].text);
       } else {
         console.error("AI returned empty word list, cannot assign target word.");
       }
   }
+
 
   return { updatedPlayers, gameWords };
 }
@@ -90,7 +92,7 @@ export function getRoleExplanation(role: Role, targetWord?: string, clue?: strin
 
 export const initialGameState = (gameId: string, hostPlayer: Player): GameState => ({
   gameId,
-  players: [{ ...hostPlayer, score: hostPlayer.score || 0, isRevealedImposter: false }],
+  players: [{ ...hostPlayer, score: 0, isRevealedImposter: false, clue: null }],
   status: "lobby" as GameStatus,
   words: [],
   targetWord: "",
@@ -104,62 +106,58 @@ export const initialGameState = (gameId: string, hostPlayer: Player): GameState 
   chatMessages: [],
   minPlayers: 4,
   maxPlayers: 8,
-  actualPlayerCount: 1, // Starts with host
+  actualPlayerCount: 1, 
 });
 
 export function calculateScores(gameState: GameState): Player[] {
-  const { players, winner, lockedInWordGuess, targetWord } = gameState;
-  let updatedPlayers = players.map(p => ({ ...p })); // Create a mutable copy
+  const { players, winner, winningReason, words } = gameState;
+  // Ensure scores are always initialized to 0 if not present, and work with a mutable copy.
+  let updatedPlayers = players.map(p => ({ ...p, score: p.score || 0 }));
 
   const helper = updatedPlayers.find(p => p.role === 'Helper');
   const imposters = updatedPlayers.filter(p => p.role === 'Imposter');
-  const goodTeamPlayers = updatedPlayers.filter(p => p.role !== 'Imposter');
+  const goodTeamPlayers = updatedPlayers.filter(p => p.role !== 'Imposter'); // Includes Communicator, Helper, ClueHolders
 
-  if (winner === 'Imposters') {
-    if (gameState.winningReason?.includes("eliminated the secret word")) {
-      imposters.forEach(imp => {
-        const playerToUpdate = updatedPlayers.find(p => p.id === imp.id);
-        if(playerToUpdate) playerToUpdate.score += 2;
-      });
-    } else if (gameState.winningReason?.includes("locked in the wrong word")) {
-       imposters.forEach(imp => {
-        const playerToUpdate = updatedPlayers.find(p => p.id === imp.id);
-        if(playerToUpdate) playerToUpdate.score += 2;
-      });
-    } else if (gameState.winningReason?.includes("Helper exposed")) {
-      imposters.forEach(imp => {
-        const playerToUpdate = updatedPlayers.find(p => p.id === imp.id);
-        if(playerToUpdate) playerToUpdate.score += 3;
-      });
-      // Team (excluding helper) might still get some points if specified, for now, only imposters
+  if (winner === 'Team') {
+    const wrongEliminations = words.filter(w => w.isEliminated && !w.isTarget).length;
+    // Perfect game: locked in correct word, helper hidden, no wrong eliminations
+    const isPerfectGame = wrongEliminations === 0 && winningReason?.includes("Key:HELPER_HIDDEN");
+
+    if (isPerfectGame) {
       goodTeamPlayers.forEach(gtPlayer => {
-        if (gtPlayer.id !== helper?.id) {
+        const playerToUpdate = updatedPlayers.find(p => p.id === gtPlayer.id);
+        if (playerToUpdate) playerToUpdate.score += 5; // All good team members get +5
+      });
+    } else if (winningReason?.includes("Key:HELPER_EXPOSED")) {
+      // Team wins (word guessed), but Helper was exposed
+      goodTeamPlayers.forEach(gtPlayer => {
+        if (gtPlayer.id !== helper?.id) { // Exposed Helper doesn't get this point
           const playerToUpdate = updatedPlayers.find(p => p.id === gtPlayer.id);
-          if(playerToUpdate) playerToUpdate.score += 1; // Team wins (Helper exposed) team part
+          if (playerToUpdate) playerToUpdate.score += 1;
+        }
+      });
+      imposters.forEach(imp => {
+        const playerToUpdate = updatedPlayers.find(p => p.id === imp.id);
+        if (playerToUpdate) playerToUpdate.score += 3;
+      });
+    } else if (winningReason?.includes("Key:HELPER_HIDDEN")) { 
+      // Standard win: Team guessed word, Helper hidden, not a perfect game
+      goodTeamPlayers.forEach(gtPlayer => {
+        const playerToUpdate = updatedPlayers.find(p => p.id === gtPlayer.id);
+        if (playerToUpdate) {
+          playerToUpdate.score += (gtPlayer.id === helper?.id ? 3 : 2);
         }
       });
     }
-  } else if (winner === 'Team') {
-    const isHelperHidden = !gameState.winningReason?.includes("Helper exposed"); // This condition seems inverted from rules
-    // Based on new rules: "If they’re wrong → Team wins" (Helper NOT exposed implies team wins)
-
-    if (isHelperHidden) { // Helper successfully hidden
-      goodTeamPlayers.forEach(gtPlayer => {
-         const playerToUpdate = updatedPlayers.find(p => p.id === gtPlayer.id);
-         if(playerToUpdate) playerToUpdate.score += (gtPlayer.id === helper?.id ? 3 : 2);
-      });
-      // Check for perfect game
-      const wrongEliminations = gameState.words.filter(w => w.isEliminated && !w.isTarget).length;
-      if (wrongEliminations === 0) {
-        goodTeamPlayers.forEach(gtPlayer => {
-          const playerToUpdate = updatedPlayers.find(p => p.id === gtPlayer.id);
-          // Points are additive: +2/+3 initially, then +2 for perfect game (total +5 for helper, +4 for others)
-          // Or if total is +5:
-          if (playerToUpdate) playerToUpdate.score = (gtPlayer.id === helper?.id ? 5 : 5); // Overwrites previous points for simplicity. Revisit if additive.
-        });
-      }
-    }
-    // If team wins because Imposters failed to expose helper, score is handled above.
+  } else if (winner === 'Imposters') {
+    // Covers:
+    // - Team loses (wrong word locked in - Key:IMPOSTER_WIN_WRONG_WORD)
+    // - Team loses (Communicator eliminated target word - Key:IMPOSTER_WIN_TARGET_ELIMINATED)
+    imposters.forEach(imp => {
+      const playerToUpdate = updatedPlayers.find(p => p.id === imp.id);
+      if (playerToUpdate) playerToUpdate.score += 2;
+    });
   }
+  
   return updatedPlayers;
 }

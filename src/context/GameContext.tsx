@@ -3,7 +3,7 @@
 
 import type { ReactNode } from 'react';
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
-import { doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, arrayRemove, increment, runTransaction, deleteDoc, Timestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, arrayRemove, increment, runTransaction, deleteDoc, Timestamp, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type { GameState, Player, GameWord, ChatMessage, Role, GameStatus } from '@/lib/types';
 import { initialGameState, generateShortId, assignRolesAndClues, calculateScores } from '@/lib/gameUtils';
@@ -89,12 +89,11 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           winningReason: data.winningReason === undefined ? "" : data.winningReason,
           gameLog: data.gameLog || [],
           words: data.words || [],
-
         };
         setGameState(processedData);
       } else {
         setGameState(null);
-        toast({ title: "Game Not Found", description: `Game with ID ${gameIdFromParams} does not exist.`, variant: "destructive"});
+        // toast({ title: "Game Not Found", description: `Game with ID ${gameIdFromParams} does not exist.`, variant: "destructive"});
       }
       setIsLoading(false);
     }, (error) => {
@@ -218,16 +217,15 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         throw new Error("AI failed to generate complete game data. Please try starting again.");
       }
       
-      // Shuffle players before assigning roles for more randomness
-      const playersForRoleAssignment = [...gameState.players].sort(() => Math.random() - 0.5);
-      const { updatedPlayers, gameWords } = assignRolesAndClues(playersForRoleAssignment, aiData);
+      const shuffledPlayersForAssignment = [...gameState.players].sort(() => Math.random() - 0.5);
+      const { updatedPlayers, gameWords } = assignRolesAndClues(shuffledPlayersForAssignment, aiData, gameState.minPlayers, gameState.maxPlayers);
 
       const gameDocRef = doc(db, "games", gameState.gameId);
       await updateDoc(gameDocRef, {
         status: 'role-reveal' as GameStatus,
         words: gameWords,
         targetWord: aiData.targetWord,
-        players: updatedPlayers,
+        players: updatedPlayers, // Already shuffled and roles assigned
         gameLog: arrayUnion(`Game started by ${gameState.players.find(p=>p.id === gameState.hostId)?.name}. Roles assigned!`),
         chatMessages: [], 
         eliminationCount: 0,
@@ -239,7 +237,8 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     } catch (error) {
       console.error("Failed to start game with AI:", error);
       toast({ title: "Error Starting Game", description: (error as Error).message, variant: "destructive" });
-      setIsLoading(false); 
+    } finally {
+        setIsLoading(false); 
     }
   };
 
@@ -309,15 +308,14 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         const newEliminationCount = freshGameState.eliminationCount + 1;
         let newStatus: GameStatus = 'discussion';
         let winner: GameState['winner'] = null;
-        let winningReason = "";
+        let reason = "";
         let finalPlayersState = freshGameState.players;
 
         if (wordToEnd.isTarget) {
           winner = 'Imposters';
-          winningReason = `The Communicator eliminated the secret word (${wordText})! Imposters win.`;
+          reason = `The Communicator eliminated the secret word (${wordText})! Imposters win. Key:IMPOSTER_WIN_TARGET_ELIMINATED`;
           newStatus = 'finished';
-          const scoredPlayers = calculateScores({...freshGameState, words: updatedWords, eliminationCount: newEliminationCount, winner, winningReason, players: freshGameState.players });
-          finalPlayersState = scoredPlayers;
+          finalPlayersState = calculateScores({...freshGameState, words: updatedWords, eliminationCount: newEliminationCount, winner, winningReason: reason, players: freshGameState.players });
         } else if (newEliminationCount >= freshGameState.maxEliminations) {
            toast({title: "Max Eliminations Reached", description: `No more eliminations. Team must lock in a word.`});
         }
@@ -327,8 +325,8 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           eliminationCount: newEliminationCount,
           status: newStatus,
           winner: winner,
-          winningReason: winningReason,
-          gameLog: arrayUnion(`${player.name} (Communicator) eliminated "${wordText}". Eliminations: ${newEliminationCount}/${freshGameState.maxEliminations}. ${winner ? winningReason : ''}`),
+          winningReason: reason,
+          gameLog: arrayUnion(`${player.name} (Communicator) eliminated "${wordText}". Eliminations: ${newEliminationCount}/${freshGameState.maxEliminations}. ${reason}`),
           players: finalPlayersState,
         });
       });
@@ -367,29 +365,26 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
 
         let newStatus: GameStatus = freshGameState.status;
         let winner: GameState['winner'] = null;
-        let winningReason = "";
+        let reason = "";
         let finalPlayersState = freshGameState.players;
 
         if (guessedWord.isTarget) {
           newStatus = 'post-guess-reveal';
-          winningReason = `Team locked in the correct word: "${wordText}"! Now Imposters try to find the Helper.`;
-          // Mark Imposters as revealed
+          reason = `Team locked in the correct word: "${wordText}"! Now Imposters try to find the Helper.`;
           finalPlayersState = freshGameState.players.map(p => p.role === 'Imposter' ? {...p, isRevealedImposter: true} : p);
-
         } else {
           winner = 'Imposters';
-          winningReason = `Team locked in the wrong word: "${wordText}". The secret word was "${freshGameState.targetWord}". Imposters win.`;
+          reason = `Team locked in the wrong word: "${wordText}". The secret word was "${freshGameState.targetWord}". Imposters win. Key:IMPOSTER_WIN_WRONG_WORD`;
           newStatus = 'finished';
-          const scoredPlayers = calculateScores({...freshGameState, winner, winningReason, lockedInWordGuess: {wordText, playerId: localPlayerId, isCorrect: guessedWord.isTarget}, players: freshGameState.players });
-          finalPlayersState = scoredPlayers;
+          finalPlayersState = calculateScores({...freshGameState, winner, winningReason: reason, lockedInWordGuess: {wordText, playerId: localPlayerId, isCorrect: guessedWord.isTarget}, players: freshGameState.players, words: freshGameState.words });
         }
 
         transaction.update(gameDocRef, {
           status: newStatus,
           lockedInWordGuess: { wordText, playerId: localPlayerId, isCorrect: guessedWord.isTarget },
           winner: winner,
-          winningReason: winningReason,
-          gameLog: arrayUnion(`${player.name} locked in "${wordText}". ${winningReason}`),
+          winningReason: reason,
+          gameLog: arrayUnion(`${player.name} locked in "${wordText}". ${reason}`),
           players: finalPlayersState,
         });
       });
@@ -422,28 +417,23 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         if (!freshGameSnap.exists()) throw new Error("Game not found");
         const freshGameState = freshGameSnap.data() as GameState;
 
-        let winner: GameState['winner'];
-        let winningReason = "";
+        let gameWinner: GameState['winner'] = 'Team'; // Default to Team win if word was guessed
+        let reason = "";
 
         if (accusedPlayer.role === 'Helper') {
-          // As per scoring: Team wins (Helper exposed) +1 for team, +3 for Imposters. This means Imposters get more, but Team still "wins" the round in a sense.
-          // For simplicity, let's consider this an "Imposter points win" for the twist.
-          winner = 'Imposters'; 
-          winningReason = `Imposters correctly exposed ${accusedPlayer.name} as the Helper! Imposters gain points.`;
+          reason = `Team guessed the word! Imposters (${accuser.name}) correctly exposed ${accusedPlayer.name} as the Helper. Key:HELPER_EXPOSED`;
         } else {
-          winner = 'Team';
-          winningReason = `Imposters failed to expose the Helper. ${accusedPlayer.name} was not the Helper. Team wins!`;
+          reason = `Team guessed the word! Imposters (${accuser.name}) failed to expose the Helper. ${accusedPlayer.name} was not the Helper. Key:HELPER_HIDDEN`;
         }
-
-        const finalGameStateWithAccusation = {...freshGameState, winner, winningReason, players: freshGameState.players};
-        const scoredPlayers = calculateScores(finalGameStateWithAccusation);
+        
+        const finalPlayersState = calculateScores({...freshGameState, winner: gameWinner, winningReason: reason, players: freshGameState.players, words: freshGameState.words });
 
         transaction.update(gameDocRef, {
           status: 'finished' as GameStatus,
-          winner: winner, // This sets the overall game winner based on the twist outcome.
-          winningReason: winningReason,
-          gameLog: arrayUnion(`${accuser.name} (Imposter) accused ${accusedPlayer.name} of being the Helper. ${winningReason}`),
-          players: scoredPlayers,
+          winner: gameWinner, 
+          winningReason: reason,
+          gameLog: arrayUnion(`${accuser.name} (Imposter) accused ${accusedPlayer.name} of being the Helper. ${reason}`),
+          players: finalPlayersState,
         });
       });
     } catch (error) {
@@ -470,13 +460,15 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           if (updatedPlayers.length === 0 && currentData.status === 'lobby') { 
             transaction.delete(gameDocRef);
           } else if (updatedPlayers.length < currentData.minPlayers && currentData.status !== 'lobby' && currentData.status !== 'finished') {
+            let reason = `${playerToRemove.name} left. Not enough players to continue. Game ended.`;
+            const finalPlayers = calculateScores({...currentData, players: updatedPlayers, winner: 'NoOne', winningReason: reason, words: currentData.words});
             transaction.update(gameDocRef, {
-                players: updatedPlayers,
+                players: finalPlayers,
                 actualPlayerCount: newActualPlayerCount,
                 status: 'finished' as GameStatus,
                 winner: 'NoOne' as GameState['winner'],
-                winningReason: `${playerToRemove.name} left. Not enough players to continue. Game ended.`,
-                gameLog: arrayUnion(`${playerToRemove.name} left. Game ended due to insufficient players.`)
+                winningReason: reason,
+                gameLog: arrayUnion(reason)
             });
           }
           else {
@@ -557,4 +549,3 @@ export const useGame = () => {
   }
   return context;
 };
-
