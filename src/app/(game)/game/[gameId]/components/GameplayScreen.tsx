@@ -9,7 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import type { Player, GameWord, GameState } from '@/lib/types';
+import type { Player, GameWord, GameState, Role } from '@/lib/types';
 import { Send, Users, ShieldAlert, HelpCircle, Eye, MessageSquare, Loader2, Trash2, CheckSquare, ZoomIn } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
@@ -75,22 +75,41 @@ const WordDisplay: React.FC<{
 const PlayerCard: React.FC<{
   player: Player,
   isLocalPlayer: boolean,
-  isAccuserRole: boolean,
+  localPlayerRole: Role | undefined, // Role of the person viewing the card
+  isAccuserRole: boolean, // True if the localPlayer is an Imposter during post-guess
   onAccuseHelper?: (playerId: string) => void,
   gameStatus: GameState['status']
-}> = ({ player, isLocalPlayer, isAccuserRole, onAccuseHelper, gameStatus }) => {
-  let icon;
-  const showRealRole = gameStatus === 'post-guess-reveal' || gameStatus === 'finished' || isLocalPlayer || player.isRevealedImposter;
+}> = ({ player, isLocalPlayer, localPlayerRole, isAccuserRole, onAccuseHelper, gameStatus }) => {
+  
+  let roleIsVisible = false;
 
-  if (showRealRole) {
+  if (player.role === 'Communicator') {
+    roleIsVisible = true;
+  } else if (isLocalPlayer) {
+    roleIsVisible = true;
+  } else if (gameStatus === 'finished') {
+    roleIsVisible = true;
+  } else if (player.isRevealedImposter && player.role === 'Imposter') {
+    roleIsVisible = true; // Everyone sees a revealed imposter's role
+  } else if (gameStatus === 'post-guess-reveal') {
+    // If the viewing player (localPlayer) is NOT an Imposter, they see all roles.
+    if (localPlayerRole && localPlayerRole !== 'Imposter') {
+      roleIsVisible = true;
+    }
+    // If localPlayerRole IS 'Imposter', roleIsVisible remains false for other non-communicator, non-revealed players.
+  }
+
+  let icon;
+  if (roleIsVisible) {
     switch (player.role) {
       case 'Communicator': icon = <Eye className="w-4 h-4 text-blue-500" />; break;
       case 'Helper': icon = <HelpCircle className="w-4 h-4 text-green-500" />; break;
       case 'Imposter': icon = <ShieldAlert className="w-4 h-4 text-red-500" />; break;
       case 'ClueHolder': icon = <MessageSquare className="w-4 h-4 text-yellow-500" />; break;
+      default: icon = <Users className="w-4 h-4 text-muted-foreground" />; break;
     }
   } else {
-    icon = <Users className="w-4 h-4 text-muted-foreground" />;
+    icon = <Users className="w-4 h-4 text-muted-foreground" />; // Generic icon if role is hidden
   }
 
   return (
@@ -99,10 +118,24 @@ const PlayerCard: React.FC<{
         {icon}
         <span className={`font-medium ${isLocalPlayer ? 'text-primary' : ''}`}>{player.name}</span>
         {isLocalPlayer && <Badge variant="outline">(You)</Badge>}
-        {showRealRole && <Badge variant="secondary" className="text-xs">{player.role}</Badge>}
-         {player.isRevealedImposter && !isLocalPlayer && player.role === 'Imposter' && <Badge variant="destructive" className="text-xs">Imposter</Badge>}
+        
+        {(() => {
+          // Precedence: Revealed Imposter > General Role Visibility > Nothing
+          if (player.isRevealedImposter && player.role === 'Imposter' && !isLocalPlayer) {
+            // This badge is shown to others when an imposter is revealed (e.g. during post-guess)
+            // It is also covered by roleIsVisible for the imposter themselves.
+            return <Badge variant="destructive" className="text-xs">Imposter</Badge>;
+          }
+          if (roleIsVisible) {
+             // For Communicator, this shows their role.
+             // For local player, this shows their role.
+             // For others in 'finished' or 'post-guess-reveal' (if local not imposter), shows role.
+            return <Badge variant="secondary" className="text-xs">{player.role}</Badge>;
+          }
+          return null;
+        })()}
       </div>
-      {isAccuserRole && !isLocalPlayer && player.isAlive && onAccuseHelper && gameStatus === 'post-guess-reveal' && player.role !== 'Imposter' && (
+      {isAccuserRole && !isLocalPlayer && player.isAlive && onAccuseHelper && gameStatus === 'post-guess-reveal' && player.role !== 'Imposter' && !player.isRevealedImposter && (
         <AlertDialog>
           <AlertDialogTrigger asChild>
             <Button variant="destructive" size="sm">Accuse Helper</Button>
@@ -111,7 +144,7 @@ const PlayerCard: React.FC<{
             <AlertDialogHeader>
               <AlertDialogTitle>Accuse {player.name} of being the Helper?</AlertDialogTitle>
               <AlertDialogDescription>
-                If you are correct, Imposters win. If wrong, Team wins. This action is final.
+                If you are correct, Imposters win points. If wrong, Team wins points. This action is final.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -150,7 +183,6 @@ export default function GameplayScreen() {
 
   const handleSendChat = async () => {
     if (!chatInput.trim()) return;
-    // Communicator can only chat if game status is post-guess-reveal or finished
     if (localPlayer.role === "Communicator" && gameState.status !== "post-guess-reveal" && gameState.status !== "finished") {
       toast({ title: "Communicator Restriction", description: "Communicators guide via eliminations, not chat, until post-guess reveal or game end.", variant: "default" });
       return;
@@ -209,6 +241,7 @@ export default function GameplayScreen() {
               key={p.id}
               player={p}
               isLocalPlayer={p.id === localPlayer.id}
+              localPlayerRole={localPlayer.role}
               isAccuserRole={isImposterDuringTwist}
               onAccuseHelper={handleImposterAccuseHelper}
               gameStatus={gameState.status}
@@ -224,6 +257,9 @@ export default function GameplayScreen() {
             )}
             {gameState.status === 'post-guess-reveal' && localPlayer.role !== 'Imposter' && (
               <div className="text-primary font-semibold mt-2">The team guessed the word! Waiting for Imposters to accuse the Helper...</div>
+            )}
+             {gameState.status === 'post-guess-reveal' && localPlayer.role === 'Helper' && (
+              <div className="text-green-600 font-semibold mt-2">The team found the word! Stay hidden, they're trying to find you!</div>
             )}
           </div>
         </CardFooter>
@@ -310,3 +346,5 @@ export default function GameplayScreen() {
     </div>
   );
 }
+
+    
