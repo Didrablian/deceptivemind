@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState }_ from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useGame } from '@/context/GameContext';
 import { Button } from '@/components/ui/button';
