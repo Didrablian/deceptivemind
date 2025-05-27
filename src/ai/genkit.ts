@@ -1,7 +1,7 @@
 
 import {genkit} from 'genkit';
 import {openai} from 'genkit/openai'; // Attempting to import from main genkit package
-import { config } from 'dotenv';
+import {config} from 'dotenv';
 
 config(); // Make sure environment variables are loaded
 
