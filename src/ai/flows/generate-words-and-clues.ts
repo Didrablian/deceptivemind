@@ -22,11 +22,11 @@ const GenerateWordsAndCluesInputSchema = z.object({
 export type GenerateWordsAndCluesInput = z.infer<typeof GenerateWordsAndCluesInputSchema>;
 
 const GenerateWordsAndCluesOutputSchema = z.object({
-  targetWord: z.string().describe('The selected target word. This word should be simple and commonly known (e.g., "NASA", "apple", "car").'),
-  words: z.array(z.string()).describe('The list of generated words. All words should be simple, commonly known, and distinct from each other (e.g., "sun", "book", "Elon Musk"). Each word should be a single common noun, proper noun, or a very short common phrase (max 2 words like "ice cream"). Avoid full sentences or questions.'),
+  targetWord: z.string().min(1).describe('The selected target word. This word should be simple and commonly known (e.g., "NASA", "apple", "car") and not an empty string.'),
+  words: z.array(z.string().min(1)).min(1).describe('The list of generated words. All words should be simple, commonly known, and distinct from each other (e.g., "sun", "book", "Elon Musk"). Each word should be a single common noun, proper noun, or a very short common phrase (max 2 words like "ice cream"). Avoid full sentences or questions. Each word must not be an empty string.'),
   clueHolderClue: z
-    .string()
-    .describe('A single, vague, one-word clue for the clue holder, related to the target word. This clue MUST be a single word. It should also plausibly relate to 2-3 other words in the generated words list to create ambiguity.'),
+    .string().min(1)
+    .describe('A single, vague, one-word clue for the clue holder, related to the target word. This clue MUST be a single word and not an empty string. It should also plausibly relate to 2-3 other words in the generated words list to create ambiguity.'),
 });
 export type GenerateWordsAndCluesOutput = z.infer<typeof GenerateWordsAndCluesOutputSchema>;
 
@@ -42,16 +42,16 @@ const generateWordsAndCluesPrompt = ai.definePrompt({
 Your task is to:
 1. Generate exactly {{numberOfWords}} distinct and unrelated words.
    - These words MUST be simple, common, and easily understandable by a general audience (e.g., 'apple', 'car', 'sun', 'book', 'NASA', 'coffee', 'ocean', 'dog', 'house', 'Elon Musk').
-   - Each word should be a single common noun, proper noun, or a very short common phrase (max 2 words, e.g., "ice cream"). Avoid sentences, questions, or complex descriptions for the words themselves.
+   - Each word should be a single common noun, proper noun, or a very short common phrase (max 2 words, e.g., "ice cream"). Avoid sentences, questions, or complex descriptions for the words themselves. Each word must not be an empty string.
    - Ensure the words are fresh and diverse. Do not repeat words from previous requests if possible.
-2. Select one of these generated words as the 'targetWord'. This target word should also be simple and commonly known from the list you just generated.
+2. Select one of these generated words as the 'targetWord'. This target word should also be simple and commonly known from the list you just generated and must not be an empty string.
 3. Create a single, vague, one-word clue for a 'clueHolder'.
-   - This clue MUST be a single word.
+   - This clue MUST be a single word and not an empty string.
    - It must be related to the 'targetWord'.
    - Crucially, this clue should also plausibly relate to 2-3 other words in the generated 'words' list to create ambiguity and act as red herrings.
    - Avoid direct synonyms of the targetWord for the clue. For example, if target is 'car', clue could be 'metal' (relates to car, but also maybe 'robot', 'bridge', 'statue' if they are in the list).
 
-Respond STRICTLY with a JSON object matching the output schema. Ensure 'words' is an array of strings, 'targetWord' is a string, and 'clueHolderClue' is a single string (one word).
+Respond STRICTLY with a JSON object matching the output schema. Ensure 'words' is an array of non-empty strings, 'targetWord' is a non-empty string, and 'clueHolderClue' is a single non-empty string (one word).
 `,
 });
 
@@ -63,56 +63,63 @@ const generateWordsAndCluesFlow = ai.defineFlow(
   },
   async (input: GenerateWordsAndCluesInput): Promise<GenerateWordsAndCluesOutput> => {
     let aiCallOutput: GenerateWordsAndCluesOutput | null = null;
+    const fallbackWordsList = ["apple", "banana", "cherry", "date", "elderberry", "fig", "grape", "honeydew", "kiwi", "cat", "dog", "sun", "moon", "star", "tree", "house", "car", "book", "cloud", "river", "mountain", "pencil", "phone", "game", "music", "light", "dream", "flower", "ocean", "star", "planet", "coffee", "tea"];
 
     try {
       const result = await generateWordsAndCluesPrompt(input);
       aiCallOutput = result.output;
     } catch (e) {
-      console.error("Error calling generateWordsAndCluesPrompt or parsing its output:", e);
-      // aiCallOutput remains null, will trigger the fallback logic below
+      console.error("[generateWordsAndCluesFlow] Error calling generateWordsAndCluesPrompt or parsing its output:", e);
     }
     
-    if (!aiCallOutput || !aiCallOutput.words || !aiCallOutput.targetWord || !aiCallOutput.clueHolderClue) {
-      console.warn("AI output missing crucial fields or AI call failed. Using fallback.", aiCallOutput);
-      const fallbackWords = ["apple", "banana", "cherry", "date", "elderberry", "fig", "grape", "honeydew", "kiwi"];
-      const fallbackTarget = fallbackWords[Math.floor(Math.random() * fallbackWords.length)];
+    if (!aiCallOutput || !aiCallOutput.words || aiCallOutput.words.length === 0 || !aiCallOutput.targetWord || aiCallOutput.targetWord.trim() === "" || !aiCallOutput.clueHolderClue || aiCallOutput.clueHolderClue.trim() === "") {
+      console.warn("[generateWordsAndCluesFlow] AI output missing crucial fields, is empty, or AI call failed. Using fallback.", aiCallOutput);
+      const numberOfWords = input.numberOfWords || 9;
+      let words = shuffleArray(fallbackWordsList).slice(0, numberOfWords);
+      if (words.length < numberOfWords) { // Ensure enough words
+          words = [...words, ...fallbackWordsList.slice(words.length, numberOfWords)];
+      }
+      const targetWord = words[Math.floor(Math.random() * words.length)];
       return {
-          words: fallbackWords,
-          targetWord: fallbackTarget,
-          clueHolderClue: "Fruit", // Simple fallback clue
+          words: words,
+          targetWord: targetWord,
+          clueHolderClue: "Abstract",
       };
     }
 
-    // Cleanup individual words and the target word from aiCallOutput
     const cleanedWords = aiCallOutput.words.map(word =>
       word
         .trim()
         .replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '') 
         .replace(/\s+/g, ' ') 
-    ).filter(word => word.length > 1 && word.length < 30 && !word.includes('\n') && word.split(' ').length <= 3); 
+    ).filter(word => word.length > 1 && word.length < 30 && !word.includes('\n') && word.split(' ').length <= 3 && word.trim() !== "");
 
     let finalTargetWord = aiCallOutput.targetWord
         .trim()
         .replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '')
         .replace(/\s+/g, ' ');
+    if (finalTargetWord.trim() === "") finalTargetWord = "DefaultTarget";
 
     let finalClueHolderClue = aiCallOutput.clueHolderClue
         .trim()
         .replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '')
         .replace(/\s+/g, ' ');
-     // Ensure clue is a single word
     if (finalClueHolderClue.split(' ').length > 1) {
-        console.warn(`AI generated a multi-word clueHolderClue "${aiCallOutput.clueHolderClue}". Taking the first word: "${finalClueHolderClue.split(' ')[0]}"`);
         finalClueHolderClue = finalClueHolderClue.split(' ')[0];
     }
+    if (finalClueHolderClue.trim() === "") finalClueHolderClue = "Mystery";
 
 
     if (cleanedWords.length === 0) {
-        console.error("AI generated an empty or invalid list of words after cleaning. Using secondary fallback.");
-         const fallbackWords = ["cat", "dog", "sun", "moon", "star", "tree", "house", "car", "book"];
-         finalTargetWord = fallbackWords[Math.floor(Math.random() * fallbackWords.length)];
+        console.error("[generateWordsAndCluesFlow] AI generated an empty or invalid list of words after cleaning. Using secondary fallback.");
+         const numberOfWords = input.numberOfWords || 9;
+         let words = shuffleArray(fallbackWordsList).slice(0, numberOfWords);
+         if (words.length < numberOfWords) {
+             words = [...words, ...fallbackWordsList.slice(words.length, numberOfWords)];
+         }
+         finalTargetWord = words[Math.floor(Math.random() * words.length)];
          return {
-             words: fallbackWords,
+             words: words,
              targetWord: finalTargetWord,
              clueHolderClue: "Common",
          };
@@ -120,31 +127,37 @@ const generateWordsAndCluesFlow = ai.defineFlow(
     
     const targetExistsInCleaned = cleanedWords.some(w => w.toLowerCase() === finalTargetWord.toLowerCase());
     if (!targetExistsInCleaned || finalTargetWord.length < 1 || finalTargetWord.length > 30) {
-        console.warn(`AI's targetWord "${aiCallOutput.targetWord}" (cleaned: "${finalTargetWord}") was not in its generated cleaned word list or was invalid. Falling back to the first cleaned word.`);
         finalTargetWord = cleanedWords[0]; 
     } else {
+        // Use the exact casing from cleanedWords if there's a match
         finalTargetWord = cleanedWords.find(w => w.toLowerCase() === finalTargetWord.toLowerCase()) || finalTargetWord;
     }
+     if (finalTargetWord.trim() === "") finalTargetWord = cleanedWords[0] || "FallbackWord";
     
     let finalWords = [...new Set(cleanedWords.filter(w => w.length > 0))]; 
     
-    if (finalWords.length < (input.numberOfWords || 9)) {
-        console.warn(`AI generated only ${finalWords.length} valid words after cleaning. Attempting to supplement.`);
-        const needed = (input.numberOfWords || 9) - finalWords.length;
-        const baseSupplement = ["cloud", "river", "mountain", "pencil", "phone", "game", "music", "light", "dream", "flower", "ocean", "star", "planet", "coffee", "tea"];
+    const desiredWordCount = input.numberOfWords || 9;
+    if (finalWords.length < desiredWordCount) {
+        const needed = desiredWordCount - finalWords.length;
+        const baseSupplement = shuffleArray(fallbackWordsList);
         const supplementToAdd = baseSupplement.filter(s => !finalWords.some(fw => fw.toLowerCase() === s.toLowerCase())).slice(0, needed);
         finalWords.push(...supplementToAdd);
     }
-    finalWords = finalWords.slice(0, (input.numberOfWords || 9));
+    finalWords = finalWords.slice(0, desiredWordCount);
+
+    // Ensure target word is in the list
     if (!finalWords.some(w => w.toLowerCase() === finalTargetWord.toLowerCase())) {
         if (finalWords.length > 0) {
-            console.warn(`Target word "${finalTargetWord}" was not in the final list after supplementation. Replacing a word.`);
             finalWords[finalWords.length -1] = finalTargetWord; 
         } else { 
-             console.error("Catastrophic failure in word generation, returning absolute minimum fallback.");
-             finalWords = [finalTargetWord, "backup1", "backup2", "backup3", "backup4", "backup5", "backup6", "backup7", "backup8"].slice(0,9);
+             finalWords = Array(desiredWordCount -1).fill(null).map((_,i) => fallbackWordsList[i % fallbackWordsList.length]);
+             finalWords.push(finalTargetWord);
+             finalWords = finalWords.slice(0, desiredWordCount);
         }
     }
+     // Ensure all final words are non-empty
+    finalWords = finalWords.map(w => w.trim() === "" ? fallbackWordsList[Math.floor(Math.random() * fallbackWordsList.length)] : w);
+
 
     return {
       words: finalWords,
@@ -154,4 +167,13 @@ const generateWordsAndCluesFlow = ai.defineFlow(
   }
 );
 
+// Helper function, ensure it's available if used or define it locally
+function shuffleArray<T>(array: T[]): T[] {
+  const newArray = [...array];
+  for (let i = newArray.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+  }
+  return newArray;
+}
     
