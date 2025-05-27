@@ -1,13 +1,13 @@
 
 import {genkit} from 'genkit';
-import {openai} from 'genkit/openai'; // Attempting to import from main genkit package
+import openAI from 'genkitx-openai';
 import {config} from 'dotenv';
 
 config(); // Make sure environment variables are loaded
 
 export const ai = genkit({
   plugins: [
-    openai({ // This function now comes from 'genkit/openai'
+    openAI({ 
       apiKey: process.env.OPENAI_API_KEY,
     }),
   ],

@@ -202,6 +202,11 @@ const generateImagesAndCluesFlow = ai.defineFlow(
         try {
             console.log('[generateImagesAndCluesFlow] Selecting target and generating clue for descriptions:', descriptionsForCluePrompt);
             const llmResult = await selectTargetAndCluePrompt({ objectDescriptions: descriptionsForCluePrompt });
+            
+            if (!llmResult.output) {
+                throw new Error('LLM result output is null');
+            }
+            
             targetAndClueResult = llmResult.output;
 
             if (!targetAndClueResult || !targetAndClueResult.targetItemDescription || targetAndClueResult.targetItemDescription.trim() === "" || !targetAndClueResult.clueHolderClue || targetAndClueResult.clueHolderClue.trim() === "") {
