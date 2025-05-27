@@ -12,6 +12,7 @@
 
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
+import type { AIGameDataOutput } from '@/lib/types';
 
 const GenerateWordsAndCluesInputSchema = z.object({
   numberOfWords: z
@@ -23,15 +24,22 @@ export type GenerateWordsAndCluesInput = z.infer<typeof GenerateWordsAndCluesInp
 
 const GenerateWordsAndCluesOutputSchema = z.object({
   targetWord: z.string().min(1).describe('The selected target word. This word should be simple and commonly known (e.g., "NASA", "apple", "car") and not an empty string.'),
-  words: z.array(z.string().min(1)).min(1).describe('The list of generated words. All words should be simple, commonly known, and distinct from each other (e.g., "sun", "book", "Elon Musk"). Each word should be a single common noun, proper noun, or a very short common phrase (max 2 words like "ice cream"). Avoid full sentences or questions. Each word must not be an empty string.'),
+  words: z.array(z.string().min(1)).min(1).describe('The list of generated words. All words should be simple, commonly known, and distinct from each other (e.g., "sun", "book", "Elon Musk"). Each word should be a single common noun, proper noun, or a very short common phrase (max 2 words like "ice cream"). Avoid full sentences or questions. Each word must not be an empty string. The list should contain exactly the number of words specified in the input.'),
   clueHolderClue: z
     .string().min(1)
     .describe('A single, vague, one-word clue for the clue holder, related to the target word. This clue MUST be a single word and not an empty string. It should also plausibly relate to 2-3 other words in the generated words list to create ambiguity.'),
 });
 export type GenerateWordsAndCluesOutput = z.infer<typeof GenerateWordsAndCluesOutputSchema>;
 
-export async function generateWordsAndClues(input: GenerateWordsAndCluesInput): Promise<GenerateWordsAndCluesOutput> {
-  return generateWordsAndCluesFlow(input);
+
+export async function generateWordsAndClues(input: GenerateWordsAndCluesInput): Promise<AIGameDataOutput> {
+    const result = await generateWordsAndCluesFlow(input);
+    // Convert GenerateWordsAndCluesOutput to AIGameDataOutput
+    return {
+        targetItemDescription: result.targetWord,
+        items: result.words.map(word => ({ text: word })), // No imageUrl for words
+        clueHolderClue: result.clueHolderClue,
+    };
 }
 
 const generateWordsAndCluesPrompt = ai.definePrompt({
@@ -52,6 +60,7 @@ Your task is to:
    - Avoid direct synonyms of the targetWord for the clue. For example, if target is 'car', clue could be 'metal' (relates to car, but also maybe 'robot', 'bridge', 'statue' if they are in the list).
 
 Respond STRICTLY with a JSON object matching the output schema. Ensure 'words' is an array of non-empty strings, 'targetWord' is a non-empty string, and 'clueHolderClue' is a single non-empty string (one word).
+Ensure the 'words' array contains exactly {{numberOfWords}} items.
 `,
 });
 
@@ -83,15 +92,16 @@ const generateWordsAndCluesFlow = ai.defineFlow(
       return {
           words: words,
           targetWord: targetWord,
-          clueHolderClue: "Abstract",
+          clueHolderClue: "Abstract", // Ensure fallback clue is a single word
       };
     }
 
+    // Clean up words, targetWord, and clueHolderClue
     const cleanedWords = aiCallOutput.words.map(word =>
       word
         .trim()
-        .replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '') 
-        .replace(/\s+/g, ' ') 
+        .replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '') // Remove leading/trailing non-alphanumeric, keep internal spaces/hyphens
+        .replace(/\s+/g, ' ') // Normalize multiple spaces to single space
     ).filter(word => word.length > 1 && word.length < 30 && !word.includes('\n') && word.split(' ').length <= 3 && word.trim() !== "");
 
     let finalTargetWord = aiCallOutput.targetWord
@@ -104,7 +114,7 @@ const generateWordsAndCluesFlow = ai.defineFlow(
         .trim()
         .replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '')
         .replace(/\s+/g, ' ');
-    if (finalClueHolderClue.split(' ').length > 1) {
+    if (finalClueHolderClue.split(' ').length > 1) { // Ensure it's a single word
         finalClueHolderClue = finalClueHolderClue.split(' ')[0];
     }
     if (finalClueHolderClue.trim() === "") finalClueHolderClue = "Mystery";
@@ -121,41 +131,45 @@ const generateWordsAndCluesFlow = ai.defineFlow(
          return {
              words: words,
              targetWord: finalTargetWord,
-             clueHolderClue: "Common",
+             clueHolderClue: "Common", // Ensure fallback clue is a single word
          };
     }
     
+    // Ensure target word exists in the cleaned list, if not, pick the first one
     const targetExistsInCleaned = cleanedWords.some(w => w.toLowerCase() === finalTargetWord.toLowerCase());
     if (!targetExistsInCleaned || finalTargetWord.length < 1 || finalTargetWord.length > 30) {
-        finalTargetWord = cleanedWords[0]; 
+        finalTargetWord = cleanedWords[0]; // Fallback to the first cleaned word if target is invalid or not found
     } else {
         // Use the exact casing from cleanedWords if there's a match
         finalTargetWord = cleanedWords.find(w => w.toLowerCase() === finalTargetWord.toLowerCase()) || finalTargetWord;
     }
-     if (finalTargetWord.trim() === "") finalTargetWord = cleanedWords[0] || "FallbackWord";
+     if (finalTargetWord.trim() === "") finalTargetWord = cleanedWords[0] || "FallbackWord"; // Final check for empty target
     
-    let finalWords = [...new Set(cleanedWords.filter(w => w.length > 0))]; 
+    let finalWords = [...new Set(cleanedWords.filter(w => w.length > 0))]; // Deduplicate and filter empty strings
     
+    // Ensure the list has the desired number of words
     const desiredWordCount = input.numberOfWords || 9;
     if (finalWords.length < desiredWordCount) {
         const needed = desiredWordCount - finalWords.length;
         const baseSupplement = shuffleArray(fallbackWordsList);
+        // Add words from fallback list that are not already in finalWords
         const supplementToAdd = baseSupplement.filter(s => !finalWords.some(fw => fw.toLowerCase() === s.toLowerCase())).slice(0, needed);
         finalWords.push(...supplementToAdd);
     }
+    // Trim to exact count if too many were generated/supplemented
     finalWords = finalWords.slice(0, desiredWordCount);
 
-    // Ensure target word is in the list
+    // Ensure target word is definitely in the list. If not, replace the last word.
     if (!finalWords.some(w => w.toLowerCase() === finalTargetWord.toLowerCase())) {
         if (finalWords.length > 0) {
-            finalWords[finalWords.length -1] = finalTargetWord; 
-        } else { 
+            finalWords[finalWords.length -1] = finalTargetWord; // Replace last word
+        } else { // Should not happen if cleanedWords had items, but defensive
              finalWords = Array(desiredWordCount -1).fill(null).map((_,i) => fallbackWordsList[i % fallbackWordsList.length]);
              finalWords.push(finalTargetWord);
              finalWords = finalWords.slice(0, desiredWordCount);
         }
     }
-     // Ensure all final words are non-empty
+     // Ensure all final words are non-empty (last resort check)
     finalWords = finalWords.map(w => w.trim() === "" ? fallbackWordsList[Math.floor(Math.random() * fallbackWordsList.length)] : w);
 
 
@@ -167,7 +181,7 @@ const generateWordsAndCluesFlow = ai.defineFlow(
   }
 );
 
-// Helper function, ensure it's available if used or define it locally
+// Helper function to shuffle an array
 function shuffleArray<T>(array: T[]): T[] {
   const newArray = [...array];
   for (let i = newArray.length - 1; i > 0; i--) {

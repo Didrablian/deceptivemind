@@ -1,18 +1,20 @@
 
 'use server';
 /**
- * @fileOverview Generates a set of distinct images of common objects, selects one as the target,
+ * @fileOverview Generates a set of distinct images of common objects using OpenAI, selects one as the target,
  * and creates an indirect clue related to the target object for the clue holder.
  * Objects and clues should be simple, common, and easily understandable.
  *
  * - generateImagesAndClues - A function that generates images, a clue, and assigns a target.
  * - GenerateImagesInput - The input type for the generateImagesAndClues function.
- * - GenerateImagesOutput - The return type for the generateImagesAndClues function.
+ * - GenerateImagesFlowOutput (internal) - The output type for the Genkit flow.
+ * - AIGameDataOutput (external) - The unified output type for the game context.
  */
 
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
-import type { AIGameDataOutput } from '@/lib/types'; // Using the unified output type
+import OpenAI from 'openai';
+import type { AIGameDataOutput } from '@/lib/types';
 
 const GenerateImagesInputSchema = z.object({
   numberOfImages: z
@@ -22,51 +24,53 @@ const GenerateImagesInputSchema = z.object({
 });
 export type GenerateImagesInput = z.infer<typeof GenerateImagesInputSchema>;
 
-// This schema is for the final output of the main flow, including generated images
-const GenerateImagesOutputSchema = z.object({
-  targetItemDescription: z.string().describe('The text description of the selected target image/object. This description should be simple and commonly known (e.g., "a red apple", "a wooden chair", "a blue ball"). It MUST be one of the input object descriptions.'),
+// Internal schema for the flow's direct output
+const GenerateImagesFlowOutputSchema = z.object({
+  targetItemDescription: z.string().min(1).describe('The text description of the selected target image/object. This description should be simple and commonly known (e.g., "a red apple", "a wooden chair", "a blue ball"). It MUST be one of the input object descriptions and not an empty string.'),
   items: z.array(
     z.object({
       imageUrl: z.string().url().describe("The data URI of the generated image. Expected format: 'data:image/png;base64,<encoded_data>' or a placeholder URL."),
-      text: z.string().describe('The text description of the generated image/object. This MUST be the exact corresponding input description string.'),
+      text: z.string().min(1).describe('The text description of the generated image/object. This MUST be the exact corresponding input description string and not an empty string.'),
     })
-  ).length(4).describe('The list of generated images and their descriptions. Each "text" field must correspond to an input object description. There should be exactly 4 items.'),
+  ).min(1).describe('The list of generated images and their descriptions. Each "text" field must correspond to an input object description.'),
   clueHolderClue: z
-    .string()
-    .describe('A single, vague, one-word clue for the clue holder, related to the target object. This clue MUST be a single word. It should also plausibly relate to 2-3 other objects in the generated items list to create ambiguity.'),
+    .string().min(1)
+    .describe('A single, vague, one-word clue for the clue holder, related to the target object. This clue MUST be a single word and not an empty string. It should also plausibly relate to 2-3 other objects in the generated items list to create ambiguity.'),
 });
-export type GenerateImagesOutput = z.infer<typeof GenerateImagesOutputSchema>;
+type GenerateImagesFlowOutput = z.infer<typeof GenerateImagesFlowOutputSchema>;
 
-
+// Wrapper function to match AIGameDataOutput
 export async function generateImagesAndClues(input: GenerateImagesInput): Promise<AIGameDataOutput> {
-    const result = await generateImagesAndCluesFlow(input);
+    const flowResult = await generateImagesAndCluesFlow(input);
 
-    if (!result || !result.items || result.items.length === 0 || !result.targetItemDescription || result.targetItemDescription.trim() === "" || !result.clueHolderClue || result.clueHolderClue.trim() === "") {
-        console.error("[generateImagesAndClues wrapper] Flow returned incomplete or empty critical data:", result);
-        // Return a default, fully-formed AIGameDataOutput to prevent GameContext from erroring.
-        const defaultItems = Array(input.numberOfImages || 4).fill(null).map((_, i) => ({
-            text: `Default Item ${i + 1}`,
-            imageUrl: 'https://placehold.co/300x300.png'
-        }));
+    // Basic validation on critical fields of flowResult before returning
+    const defaultItems = Array(input.numberOfImages).fill(null).map((_, i) => ({
+        text: `Default Item ${i + 1}`,
+        imageUrl: 'https://placehold.co/300x300.png'
+    }));
+
+    if (!flowResult || !flowResult.items || flowResult.items.length === 0 || flowResult.items.some(item => !item.text || item.text.trim() === "" || !item.imageUrl) || !flowResult.targetItemDescription || flowResult.targetItemDescription.trim() === "" || !flowResult.clueHolderClue || flowResult.clueHolderClue.trim() === "") {
+        console.error("[generateImagesAndClues wrapper] Flow returned incomplete or malformed critical data:", flowResult);
         return {
             targetItemDescription: defaultItems[0]?.text || "Default Target",
             items: defaultItems,
             clueHolderClue: "Default Clue"
         };
     }
-
+    
     return {
-        targetItemDescription: result.targetItemDescription,
-        items: result.items.map(item => ({ text: item.text, imageUrl: item.imageUrl })),
-        clueHolderClue: result.clueHolderClue,
+        targetItemDescription: flowResult.targetItemDescription,
+        items: flowResult.items.map(item => ({ text: item.text, imageUrl: item.imageUrl })),
+        clueHolderClue: flowResult.clueHolderClue,
     };
 }
+
 
 // Prompt for generating initial object descriptions
 const generateObjectDescriptionsPrompt = ai.definePrompt({
     name: 'generateObjectDescriptionsPrompt',
     input: { schema: z.object({ numberOfObjects: z.number() }) },
-    output: { schema: z.object({ objectDescriptions: z.array(z.string().min(1)).length(4) }) }, // Ensure strings are not empty
+    output: { schema: z.object({ objectDescriptions: z.array(z.string().min(1)).min(1) }) },
     prompt: `Generate exactly {{numberOfObjects}} distinct descriptions of simple, common, everyday objects.
 Each description should be 2-4 words long (e.g., "a red apple", "a blue bicycle", "a yellow pencil", "a green plant").
 The objects MUST be visually distinct, easily recognizable, and common knowledge. Avoid niche or complex items.
@@ -78,7 +82,7 @@ Example response: {"objectDescriptions": ["a fluffy cat", "a steaming coffee cup
 // Prompt for selecting target and generating clue, given the descriptions
 const selectTargetAndCluePrompt = ai.definePrompt({
     name: 'selectTargetAndCluePrompt',
-    input: { schema: z.object({ objectDescriptions: z.array(z.string().min(1)) }) }, // Ensure input descriptions are not empty
+    input: { schema: z.object({ objectDescriptions: z.array(z.string().min(1)) }) },
     output: { schema: z.object({
         targetItemDescription: z.string().min(1).describe("The selected target object description. MUST be one of the provided objectDescriptions and not an empty string."),
         clueHolderClue: z.string().min(1).describe("A single, vague, one-word clue for the clue holder, related to the target object. This clue MUST be a single word and not an empty string. It should also plausibly relate to 1-2 other objects from the provided descriptions to create ambiguity.")
@@ -107,124 +111,145 @@ const generateImagesAndCluesFlow = ai.defineFlow(
   {
     name: 'generateImagesAndCluesFlow',
     inputSchema: GenerateImagesInputSchema,
-    outputSchema: GenerateImagesOutputSchema,
+    outputSchema: GenerateImagesFlowOutputSchema, // Use internal schema
   },
-  async (input: GenerateImagesInput): Promise<GenerateImagesOutput> => {
+  async (input: GenerateImagesInput): Promise<GenerateImagesFlowOutput> => {
+    const openai = new OpenAI({ 
+        apiKey: process.env.OPENAI_API_KEY,
+        organization: process.env.OPENAI_ORGANIZATION_ID, // Added optional organization ID
+    });
     let objectDescriptions: string[];
-    const placeholderUrl = `https://placehold.co/300x300.png`;
+    const placeholderUrl = 'https://placehold.co/300x300.png';
     const defaultFallbackDescriptions = ["a red apple", "a blue ball", "a yellow banana", "a green pear"];
 
+    // Step 1: Generate Object Descriptions using Genkit (OpenAI text model)
     try {
+        console.log('[generateImagesAndCluesFlow] Generating object descriptions...');
         const descResult = await generateObjectDescriptionsPrompt({numberOfObjects: input.numberOfImages});
         const output = descResult.output;
-        if (!output || !output.objectDescriptions || output.objectDescriptions.length !== input.numberOfImages || output.objectDescriptions.some(d => d.trim() === "")) {
+        if (!output || !output.objectDescriptions || output.objectDescriptions.length === 0 || output.objectDescriptions.some(d => d.trim() === "")) {
             console.warn('[generateImagesAndCluesFlow] AI failed to generate a valid list of object descriptions. Using fallback.');
             throw new Error('Fallback to default descriptions due to AI failure in generating descriptions.');
         }
         objectDescriptions = output.objectDescriptions.map(desc => desc.trim().replace(/\.$/, '')).filter(d => d.trim() !== "");
-        if (objectDescriptions.length < input.numberOfImages) {
+         if (objectDescriptions.length === 0) { // If all descriptions became empty after cleaning
+            console.warn(`[generateImagesAndCluesFlow] All AI generated descriptions were invalid after cleaning. Using full fallback.`);
+            throw new Error('All AI generated descriptions were invalid.');
+         }
+         if (objectDescriptions.length < input.numberOfImages) {
             console.warn(`[generateImagesAndCluesFlow] AI generated insufficient valid descriptions. Supplementing. Have: ${objectDescriptions.length}, Need: ${input.numberOfImages}`);
             const needed = input.numberOfImages - objectDescriptions.length;
-            objectDescriptions.push(...defaultFallbackDescriptions.slice(0, needed));
+            objectDescriptions.push(...defaultFallbackDescriptions.slice(0, needed).filter(d => !objectDescriptions.includes(d)));
         }
+        objectDescriptions = objectDescriptions.slice(0, input.numberOfImages);
+
 
     } catch (e) {
         console.error("[generateImagesAndCluesFlow] Error generating object descriptions, using fallback:", e);
         objectDescriptions = defaultFallbackDescriptions.slice(0, input.numberOfImages);
     }
 
-    // Step 2: Generate Images Programmatically
+    // Step 2: Generate Images using OpenAI SDK (DALL-E 3 or gpt-image-1)
     const generatedItems: { text: string; imageUrl: string }[] = [];
+    console.log('[generateImagesAndCluesFlow] Generating images for descriptions:', objectDescriptions);
 
     for (const description of objectDescriptions) {
         let imageUrl = placeholderUrl; 
         const itemText = description.trim() === "" ? `Fallback Item ${generatedItems.length + 1}` : description;
-        try {
-            console.log(`[generateImagesAndCluesFlow] Attempting to generate image for: "${itemText}"`);
-            const imageResult = await ai.generate({
-                model: 'googleai/gemini-2.0-flash-exp', 
-                prompt: itemText, 
-                config: {
-                    responseModalities: ['TEXT', 'IMAGE'], 
-                },
-            });
-            console.log(`[generateImagesAndCluesFlow] Raw imageResult for "${itemText}":`, JSON.stringify(imageResult, null, 2));
 
-            if (imageResult.media && imageResult.media.url && imageResult.media.url.startsWith('data:image')) {
-                imageUrl = imageResult.media.url;
+        try {
+            console.log(`[generateImagesAndCluesFlow] Attempting to generate image for: "${itemText}" using gpt-image-1`);
+            const imageResponse = await openai.images.generate({
+                model: "gpt-image-1", // Switched to gpt-image-1
+                prompt: itemText, 
+                n: 1,
+                size: "1024x1024", 
+                response_format: "b64_json",
+            });
+
+            if (imageResponse.data && imageResponse.data[0] && imageResponse.data[0].b64_json) {
+                imageUrl = `data:image/png;base64,${imageResponse.data[0].b64_json}`;
                 console.log(`[generateImagesAndCluesFlow] Successfully generated image for: "${itemText}"`);
             } else {
-                console.warn(`[generateImagesAndCluesFlow] Failed to generate valid image data URI for "${itemText}". Media object:`, imageResult.media ? JSON.stringify(imageResult.media) : 'Not present');
+                console.warn(`[generateImagesAndCluesFlow] Failed to generate valid image data from OpenAI for "${itemText}". Response:`, imageResponse);
             }
         } catch (imgError) {
-            console.error(`[generateImagesAndCluesFlow] Error during image generation for "${itemText}":`, imgError);
+            console.error(`[generateImagesAndCluesFlow] Error during OpenAI image generation for "${itemText}":`, imgError);
         }
         generatedItems.push({ text: itemText, imageUrl: imageUrl });
     }
     
+    // Ensure we have the correct number of items
     while (generatedItems.length < input.numberOfImages) {
         const fallbackDesc = defaultFallbackDescriptions[generatedItems.length % defaultFallbackDescriptions.length] || `Fallback Object ${generatedItems.length + 1}`;
         console.warn(`[generateImagesAndCluesFlow] Adding placeholder for missing item ${generatedItems.length +1}. Description: ${fallbackDesc}`);
         generatedItems.push({ text: fallbackDesc, imageUrl: placeholderUrl });
     }
+    generatedItems.length = input.numberOfImages; // Ensure exactly the number of items requested.
 
 
-    // Step 3: Select Target and Generate Clue
+    // Step 3: Select Target and Generate Clue using Genkit (OpenAI text model)
     let targetAndClueResult: { targetItemDescription: string; clueHolderClue: string; };
-    try {
-        const descriptionsForCluePrompt = generatedItems.map(item => item.text).filter(text => text.trim() !== "");
-        if (descriptionsForCluePrompt.length === 0) {
-            console.error("[generateImagesAndCluesFlow] No valid descriptions available for clue prompt. Using hard fallbacks.");
-            throw new Error("No valid descriptions for clue prompt.");
-        }
-
-        const llmResult = await selectTargetAndCluePrompt({ objectDescriptions: descriptionsForCluePrompt });
-        targetAndClueResult = llmResult.output;
-
-        if (!targetAndClueResult || !targetAndClueResult.targetItemDescription || targetAndClueResult.targetItemDescription.trim() === "" || !targetAndClueResult.clueHolderClue || targetAndClueResult.clueHolderClue.trim() === "") {
-            throw new Error('AI output for target/clue is malformed, incomplete, or contains empty strings.');
-        }
-        
-        targetAndClueResult.clueHolderClue = targetAndClueResult.clueHolderClue.trim().split(' ')[0].replace(/^[^a-zA-Z0-9'-]+|[^a-zA-Z0-9'-]+$/g, '');
-        if (!targetAndClueResult.clueHolderClue) {
-            console.warn("[generateImagesAndCluesFlow] AI clue was empty after cleaning for target/clue prompt. Using fallback 'Vague'.");
-            targetAndClueResult.clueHolderClue = "Vague";
-        }
-
-        const cleanedTarget = targetAndClueResult.targetItemDescription.trim().replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '').replace(/\s+/g, ' ');
-        if (!descriptionsForCluePrompt.some(desc => desc.toLowerCase() === cleanedTarget.toLowerCase())) {
-            console.warn(`[generateImagesAndCluesFlow] AI target description "${targetAndClueResult.targetItemDescription}" (cleaned: "${cleanedTarget}") not in generated item descriptions. Selecting first description as target.`);
-            targetAndClueResult.targetItemDescription = descriptionsForCluePrompt[0];
-        } else {
-            const matchedDesc = descriptionsForCluePrompt.find(desc => desc.toLowerCase() === cleanedTarget.toLowerCase());
-            targetAndClueResult.targetItemDescription = matchedDesc || cleanedTarget; // Use original casing if matched
-        }
-
-    } catch (tcError) {
-        console.error("[generateImagesAndCluesFlow] Error in selectTargetAndCluePrompt or its output parsing, or preceding logic:", tcError);
-        const fallbackTargetDesc = generatedItems[0]?.text || defaultFallbackDescriptions[0] || "Error Object";
+    const descriptionsForCluePrompt = generatedItems.map(item => item.text).filter(text => text && text.trim() !== "");
+    
+    if (descriptionsForCluePrompt.length === 0) {
+        console.error("[generateImagesAndCluesFlow] No valid descriptions available for clue prompt. Using hard fallbacks.");
         targetAndClueResult = {
-            targetItemDescription: fallbackTargetDesc.trim() === "" ? "Default Target Fallback" : fallbackTargetDesc,
+            targetItemDescription: generatedItems[0]?.text || defaultFallbackDescriptions[0] || "Error Object",
             clueHolderClue: "Abstract",
         };
+    } else {
+        try {
+            console.log('[generateImagesAndCluesFlow] Selecting target and generating clue for descriptions:', descriptionsForCluePrompt);
+            const llmResult = await selectTargetAndCluePrompt({ objectDescriptions: descriptionsForCluePrompt });
+            targetAndClueResult = llmResult.output;
+
+            if (!targetAndClueResult || !targetAndClueResult.targetItemDescription || targetAndClueResult.targetItemDescription.trim() === "" || !targetAndClueResult.clueHolderClue || targetAndClueResult.clueHolderClue.trim() === "") {
+                console.warn("[generateImagesAndCluesFlow] AI output for target/clue is malformed or contains empty strings. Using fallback.", targetAndClueResult);
+                throw new Error('AI output for target/clue is malformed.');
+            }
+            
+            targetAndClueResult.clueHolderClue = targetAndClueResult.clueHolderClue.trim().split(' ')[0].replace(/^[^a-zA-Z0-9'-]+|[^a-zA-Z0-9'-]+$/g, '');
+            if (!targetAndClueResult.clueHolderClue) {
+                targetAndClueResult.clueHolderClue = "Vague";
+            }
+
+            const cleanedTarget = targetAndClueResult.targetItemDescription.trim().replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '').replace(/\s+/g, ' ');
+            const matchedDesc = descriptionsForCluePrompt.find(desc => desc.toLowerCase() === cleanedTarget.toLowerCase());
+            if (!matchedDesc) {
+                console.warn(`[generateImagesAndCluesFlow] AI target description "${targetAndClueResult.targetItemDescription}" not in generated item descriptions. Selecting first description as target.`);
+                targetAndClueResult.targetItemDescription = descriptionsForCluePrompt[0];
+            } else {
+                targetAndClueResult.targetItemDescription = matchedDesc;
+            }
+
+        } catch (tcError) {
+            console.error("[generateImagesAndCluesFlow] Error in selectTargetAndCluePrompt or its output parsing:", tcError);
+            const fallbackTargetDesc = descriptionsForCluePrompt[0] || generatedItems[0]?.text || defaultFallbackDescriptions[0] || "Error Object";
+            targetAndClueResult = {
+                targetItemDescription: fallbackTargetDesc.trim() === "" ? "Default Target Fallback" : fallbackTargetDesc,
+                clueHolderClue: "Abstract",
+            };
+        }
     }
     
+    // Final processing for output schema
     let finalItemsArray = generatedItems.map(item => ({
         ...item,
         text: (item.text && item.text.trim() !== "") ? item.text : `Unnamed Item ${Math.random().toString(36).substring(7)}`
-    })).slice(0, input.numberOfImages);
+    })).slice(0, input.numberOfImages); 
 
-
-    // Final check for empty critical strings before returning
     let finalTargetDesc = (targetAndClueResult.targetItemDescription && targetAndClueResult.targetItemDescription.trim() !== "") 
                             ? targetAndClueResult.targetItemDescription 
                             : (finalItemsArray[0]?.text || "Default Target Final");
+    if (finalTargetDesc.trim() === "") finalTargetDesc = "Default Target Fallback";
     
     let finalClue = (targetAndClueResult.clueHolderClue && targetAndClueResult.clueHolderClue.trim() !== "")
-                        ? targetAndClueResult.clueHolderClue
+                        ? targetAndClueResult.clueHolderClue.split(' ')[0] // ensure single word
                         : "Mystery";
+    if (finalClue.trim() === "") finalClue = "Mystery";
 
-    if (finalItemsArray.length === 0 && input.numberOfImages > 0) { // Ensure items array is not empty if it's expected
+    if (finalItemsArray.length === 0 && input.numberOfImages > 0) {
         console.warn(`[generateImagesAndCluesFlow] Final items array is empty. Re-populating with fallbacks.`);
         finalItemsArray = Array(input.numberOfImages).fill(null).map((_,i) => ({
             text: defaultFallbackDescriptions[i % defaultFallbackDescriptions.length] || `Fallback Item ${i+1}`,
@@ -234,7 +259,6 @@ const generateImagesAndCluesFlow = ai.defineFlow(
             finalTargetDesc = finalItemsArray[0]?.text || "Default Target Final";
         }
     }
-
 
     return {
         targetItemDescription: finalTargetDesc,
