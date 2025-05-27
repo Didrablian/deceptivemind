@@ -149,7 +149,7 @@ const generateImagesAndCluesFlow = ai.defineFlow(
         objectDescriptions = defaultFallbackDescriptions.slice(0, input.numberOfImages);
     }
 
-    // Step 2: Generate Images using OpenAI SDK (DALL-E 3 or gpt-image-1)
+    // Step 2: Generate Images using OpenAI SDK (e.g., DALL-E 3 or gpt-image-1)
     const generatedItems: { text: string; imageUrl: string }[] = [];
     console.log('[generateImagesAndCluesFlow] Generating images for descriptions:', objectDescriptions);
 
@@ -158,12 +158,12 @@ const generateImagesAndCluesFlow = ai.defineFlow(
         const itemText = description.trim() === "" ? `Fallback Item ${generatedItems.length + 1}` : description;
 
         try {
-            console.log(`[generateImagesAndCluesFlow] Attempting to generate image for: "${itemText}" using gpt-image-1`);
+            console.log(`[generateImagesAndCluesFlow] Attempting to generate image for: "${itemText}" using OpenAI SDK`);
             const imageResponse = await openai.images.generate({
-                model: "gpt-image-1", // Switched to gpt-image-1
-                prompt: itemText, 
+                model: "gpt-image-1", // Or "dall-e-3" based on your preference/access
+                prompt: itemText, // Using the simple description as the prompt
                 n: 1,
-                size: "1024x1024", 
+                size: "1024x1024", // DALL-E 3 supports 1024x1024, 1024x1792 or 1792x1024
                 response_format: "b64_json",
             });
 
