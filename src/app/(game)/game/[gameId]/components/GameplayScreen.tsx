@@ -9,13 +9,13 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
-import type { Player, GameItem, GameState, Role } from '@/lib/types'; // Changed GameWord to GameItem
+import type { Player, GameItem, GameState, Role } from '@/lib/types';
 import { Send, Users, ShieldAlert, HelpCircle, Eye, MessageSquare, Loader2, Trash2, CheckSquare, ZoomIn, CheckCircle2, Image as LucideImage } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import NextImage from 'next/image'; // For Next.js optimized images
 
-const ItemDisplay: React.FC<{ // Renamed from WordDisplay
-  item: GameItem, // Changed from word: GameWord
+const ItemDisplay: React.FC<{
+  item: GameItem,
   player: Player,
   isCommunicator: boolean,
   onEliminate?: (itemIdentifierText: string) => void,
@@ -29,31 +29,30 @@ const ItemDisplay: React.FC<{ // Renamed from WordDisplay
     highlightClass = 'bg-muted/50 text-muted-foreground line-through opacity-70';
   }
 
-  const canEliminate = isCommunicator && !item.isEliminated && (gameStatus === 'discussion' || gameStatus === 'word-elimination');
-  const canConfirmTarget = isCommunicator && !item.isEliminated && (gameStatus === 'discussion' || gameStatus === 'word-elimination');
+  const canEliminateOrConfirm = isCommunicator && !item.isEliminated && (gameStatus === 'discussion' || gameStatus === 'word-elimination');
 
   return (
     <div
-      className={`p-2 sm:p-3 rounded-lg shadow text-center font-medium text-base sm:text-lg transition-all relative ${highlightClass} ${ (canEliminate || canConfirmTarget) ? 'cursor-pointer' : ''} flex flex-col items-center justify-center aspect-square`}
+      className={`p-2 sm:p-3 rounded-lg shadow text-center font-medium text-base sm:text-lg transition-all relative ${highlightClass} ${ (canEliminateOrConfirm) ? 'cursor-pointer' : ''} flex flex-col items-center justify-center aspect-square`}
     >
-      {gameMode === 'images' && item.imageUrl ? (
+      {gameMode === 'images' && (item.imageUrl || gameMode === 'images') ? ( // Always render container if image mode
         <div className="relative w-full h-2/3 mb-1">
-           <NextImage 
-            src={item.imageUrl || 'https://placehold.co/300x300.png'} 
-            alt={item.text} 
-            layout="fill" 
-            objectFit="contain" 
-            className="rounded-md"
-            data-ai-hint={item.text.split(' ').slice(0,2).join(' ')} // hint for image search
+           <NextImage
+            src={item.imageUrl || 'https://placehold.co/300x300.png'}
+            alt={item.text}
+            fill
+            sizes="(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 25vw"
+            className="rounded-md object-contain"
+            data-ai-hint={item.text.split(' ').slice(0,2).join(' ')}
            />
         </div>
       ) : null}
       <span className={`mt-1 text-xs sm:text-sm ${item.isEliminated ? 'line-through' : ''}`}>{item.text}</span>
-      
+
       {knowsTarget && item.isTarget && !item.isEliminated && <Badge variant="outline" className="absolute top-1 left-1 border-accent text-accent text-xs">TARGET</Badge>}
       {item.isEliminated && <Badge variant="destructive" className="absolute top-1 right-1 text-xs">GONE</Badge>}
 
-      {canEliminate && onEliminate && (
+      {canEliminateOrConfirm && isCommunicator && onEliminate && (
          <AlertDialog>
           <AlertDialogTrigger asChild>
             <Button variant="destructive" size="sm" className="absolute bottom-1 right-1 opacity-80 hover:opacity-100 p-1 sm:p-2" onClick={(e) => e.stopPropagation()}>
@@ -74,7 +73,7 @@ const ItemDisplay: React.FC<{ // Renamed from WordDisplay
           </AlertDialogContent>
         </AlertDialog>
       )}
-      {canConfirmTarget && onConfirmTarget && (
+      {canEliminateOrConfirm && isCommunicator && onConfirmTarget && (
          <AlertDialog>
           <AlertDialogTrigger asChild>
             <Button variant="default" size="sm" className="absolute bottom-1 left-1 opacity-80 hover:opacity-100 bg-green-600 hover:bg-green-700 p-1 sm:p-2" onClick={(e) => e.stopPropagation()}>
@@ -107,25 +106,27 @@ const PlayerCard: React.FC<{
   onAccuseHelper?: (playerId: string) => void,
   gameStatus: GameState['status']
 }> = ({ player, isLocalPlayer, localPlayerRole, isAccuserRole, onAccuseHelper, gameStatus }) => {
-  
+
   let roleIsVisible = false;
   if (player.role === 'Communicator') {
-    roleIsVisible = true; 
+    roleIsVisible = true;
   } else if (isLocalPlayer) {
-    roleIsVisible = true; 
+    roleIsVisible = true;
   } else if (gameStatus === 'finished') {
-    roleIsVisible = true; 
+    roleIsVisible = true;
   } else if (player.isRevealedImposter && player.role === 'Imposter') {
-    roleIsVisible = true; 
+    roleIsVisible = true;
   } else if (gameStatus === 'post-guess-reveal') {
     if (localPlayerRole && localPlayerRole !== 'Imposter') {
       roleIsVisible = true;
     } else if (localPlayerRole === 'Imposter') {
+       // Imposters only see Communicator and other revealed Imposters during twist
        if (player.role === 'Communicator' || (player.isRevealedImposter && player.role === 'Imposter')) {
          roleIsVisible = true;
        }
     }
   }
+
 
   let icon;
   if (roleIsVisible) {
@@ -137,7 +138,7 @@ const PlayerCard: React.FC<{
       default: icon = <Users className="w-4 h-4 text-muted-foreground" />; break;
     }
   } else {
-    icon = <Users className="w-4 h-4 text-muted-foreground" />; 
+    icon = <Users className="w-4 h-4 text-muted-foreground" />;
   }
 
   return (
@@ -147,7 +148,7 @@ const PlayerCard: React.FC<{
         <span className={`font-medium ${isLocalPlayer ? 'text-primary' : ''}`}>{player.name}</span>
         {isLocalPlayer && <Badge variant="outline">(You)</Badge>}
         {(() => {
-          if (roleIsVisible && player.role) { 
+          if (roleIsVisible && player.role) {
              if (player.isRevealedImposter && player.role === 'Imposter' && !isLocalPlayer) {
                 return <Badge variant="destructive" className="text-xs">Imposter</Badge>;
              }
@@ -181,7 +182,7 @@ const PlayerCard: React.FC<{
 
 
 export default function GameplayScreen() {
-  const { gameState, localPlayerId, sendChatMessage, eliminateItem, communicatorConfirmTargetItem, imposterAccuseHelperInTwist, isLoading } = useGame(); // Updated function names
+  const { gameState, localPlayerId, sendChatMessage, eliminateItem, communicatorConfirmTargetItem, imposterAccuseHelperInTwist, isLoading } = useGame();
   const [chatInput, setChatInput] = useState('');
   const { toast } = useToast();
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -237,7 +238,7 @@ export default function GameplayScreen() {
 
   const isCommunicator = localPlayer.role === 'Communicator';
   const isImposterDuringTwist = localPlayer.role === 'Imposter' && gameState.status === 'post-guess-reveal';
-  const canChat = true; 
+  const canChat = true;
 
   const itemTypeDisplay = gameState.gameMode === 'images' ? 'item' : 'word';
   const itemTypePlural = gameState.gameMode === 'images' ? 'items' : 'words';
@@ -266,7 +267,7 @@ export default function GameplayScreen() {
             <div>Status: <Badge variant={gameState.status === 'finished' ? 'default' : 'secondary'}>{gameState.status.replace('-', ' ').toUpperCase()}</Badge></div>
             <div>Eliminations: {gameState.eliminationCount}/{gameState.maxEliminations}</div>
              {gameState.status === 'post-guess-reveal' && localPlayer.role === 'Imposter' && (
-              <div className="text-accent font-semibold mt-2">The team guessed the {itemTypeDisplay}! Now, identify the Helper from the players list.</div>
+              <div className="text-accent font-semibold mt-2">Your team guessed the {itemTypeDisplay}! Now, identify the Helper from the players list.</div>
             )}
             {gameState.status === 'post-guess-reveal' && localPlayer.role !== 'Imposter' && (
               <div className="text-primary font-semibold mt-2">Your team guessed the {itemTypeDisplay}! Waiting for Imposters to identify the Helper...</div>
@@ -281,13 +282,13 @@ export default function GameplayScreen() {
       <Card className="lg:w-1/3 flex flex-col">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-             {gameState.gameMode === 'images' ? <LucideImage className="w-6 h-6 text-primary"/> : <ZoomIn className="w-6 h-6 text-primary"/> } 
+             {gameState.gameMode === 'images' ? <LucideImage className="w-6 h-6 text-primary"/> : <ZoomIn className="w-6 h-6 text-primary"/> }
              {gameState.gameMode === 'images' ? 'Images' : 'Words'} on the Board
           </CardTitle>
         </CardHeader>
-        <CardContent className={`flex-grow grid ${gameState.gameMode === 'images' ? 'grid-cols-2' : 'grid-cols-3'} gap-2 sm:gap-3 p-2 sm:p-4`}>
-          {gameState.items.map((itemObj) => ( // Changed from words to items
-            <ItemDisplay // Renamed from WordDisplay
+        <CardContent className={`flex-grow grid ${gameState.items.length === 4 ? 'grid-cols-2' : 'grid-cols-3'} gap-2 sm:gap-3 p-2 sm:p-4`}>
+          {gameState.items.map((itemObj) => (
+            <ItemDisplay
               key={itemObj.text}
               item={itemObj}
               player={localPlayer}
@@ -351,3 +352,4 @@ export default function GameplayScreen() {
     </div>
   );
 }
+
