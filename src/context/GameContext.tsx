@@ -1,4 +1,3 @@
-
 "use client";
 
 import type { ReactNode } from 'react';
@@ -10,6 +9,7 @@ import { initialGameState, generateShortId, assignRolesAndClues, calculateScores
 import { generateWordsAndClues } from '@/ai/flows/generate-words-and-clues';
 import { generateImagesAndClues } from '@/ai/flows/generate-images-and-clues';
 import { useToast } from '@/hooks/use-toast';
+import { getLobbyGameHistory, updateLobbyGameHistory } from '@/lib/gameHistory';
 
 interface GameContextProps {
   gameState: GameState | null;
@@ -29,6 +29,7 @@ interface GameContextProps {
   updatePlayerInContext: (playerData: Partial<Player> & { id: string }) => Promise<void>;
   startNewRound: () => Promise<void>;
   updateGameSettings: (settings: { gameMode: GameMode }) => Promise<void>;
+  addBot: () => Promise<void>;
 }
 
 const GameContext = createContext<GameContextProps | undefined>(undefined);
@@ -105,7 +106,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           items: data.items ? data.items.map(item => ({
             ...item,
             isEliminated: item.isEliminated || false,
-            imageUrl: item.imageUrl === undefined ? null : item.imageUrl,
+            imageUrl: item.imageUrl === null ? undefined : item.imageUrl,
           })) : [],
           playerScoresBeforeRound: data.playerScoresBeforeRound || {},
           gameMode: data.gameMode || 'words',
@@ -253,17 +254,34 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
 
     setIsLoading(true);
     try {
-      toast({ title: "Generating items and clues...", description: "Please wait." });
+      const itemType = gameState.gameMode === 'images' ? 'images' : 'words';
+      toast({ title: `Generating ${itemType} and clues...`, description: `Please wait while we generate ${gameState.numberOfItems} ${itemType}. This may take 30-60 seconds.` });
       
-      let aiData: AIGameDataOutput;
+      // Get lobby game history for unique content generation
+      const lobbyHistory = getLobbyGameHistory(gameState.gameId);
+      console.log(`🎯 [GAME-START] Lobby ${gameState.gameId} - Game #${lobbyHistory.gameCount + 1}`);
+      console.log(`📚 [GAME-START] Previous items used: ${lobbyHistory.usedDescriptions.length}`);
+      console.log(`🎨 [GAME-START] Themes explored: ${lobbyHistory.usedThemes.length}`);
+      
+      let aiData: AIGameDataOutput & { gameHistoryUpdate?: any };
       if (gameState.gameMode === 'images') {
-        aiData = await generateImagesAndClues({ numberOfImages: gameState.numberOfItems });
+        aiData = await generateImagesAndClues({ 
+          numberOfImages: gameState.numberOfItems,
+          gameHistory: lobbyHistory
+        });
       } else { // 'words' mode
+        // TODO: Update generateWordsAndClues to also use gameHistory
         aiData = await generateWordsAndClues({ numberOfWords: gameState.numberOfItems });
       }
 
       if (!aiData || !aiData.items || aiData.items.length === 0 || !aiData.targetItemDescription || !aiData.clueHolderClue) {
         throw new Error("Failed to generate complete game data. Please try starting again.");
+      }
+
+      // Update lobby history with new game data
+      if (aiData.gameHistoryUpdate) {
+        updateLobbyGameHistory(gameState.gameId, aiData.gameHistoryUpdate);
+        console.log(`✅ [GAME-START] Updated lobby history for next game`);
       }
       
       const scoresSnapshot = gameState.players.reduce((acc, p) => {
@@ -655,15 +673,31 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     try {
       toast({ title: "Generating items and clues...", description: "Please wait." });
 
-      let aiData: AIGameDataOutput;
+      // Get lobby game history for unique content generation
+      const lobbyHistory = getLobbyGameHistory(gameState.gameId);
+      console.log(`🎯 [NEW-ROUND] Lobby ${gameState.gameId} - Starting round #${lobbyHistory.gameCount + 1}`);
+      console.log(`📚 [NEW-ROUND] Previous items used: ${lobbyHistory.usedDescriptions.length}`);
+      console.log(`🎨 [NEW-ROUND] Themes explored: ${lobbyHistory.usedThemes.length}`);
+
+      let aiData: AIGameDataOutput & { gameHistoryUpdate?: any };
       if (gameState.gameMode === 'images') {
-        aiData = await generateImagesAndClues({ numberOfImages: gameState.numberOfItems });
+        aiData = await generateImagesAndClues({ 
+          numberOfImages: gameState.numberOfItems,
+          gameHistory: lobbyHistory
+        });
       } else { // 'words' mode
+        // TODO: Update generateWordsAndClues to also use gameHistory
         aiData = await generateWordsAndClues({ numberOfWords: gameState.numberOfItems });
       }
 
       if (!aiData || !aiData.items || aiData.items.length === 0 || !aiData.targetItemDescription || !aiData.clueHolderClue ) {
         throw new Error("Failed to generate complete game data for the new round.");
+      }
+
+      // Update lobby history with new game data
+      if (aiData.gameHistoryUpdate) {
+        updateLobbyGameHistory(gameState.gameId, aiData.gameHistoryUpdate);
+        console.log(`✅ [NEW-ROUND] Updated lobby history for next round`);
       }
 
       const playersForNewRound = gameState.players.map(p => ({
@@ -726,6 +760,76 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     }
   };
 
+  const addBot = async () => {
+    if (!gameState || !localPlayerId || gameState.hostId !== localPlayerId) {
+      toast({ title: "Not Host", description: "Only the host can add bots.", variant: "destructive" });
+      return;
+    }
+    if (gameState.status !== 'lobby') {
+      toast({ title: "Game Not in Lobby", description: "Can only add bots in the lobby.", variant: "destructive" });
+      return;
+    }
+    if (gameState.players.length >= gameState.maxPlayers) {
+      toast({ title: "Lobby Full", description: `Cannot add more players. Maximum is ${gameState.maxPlayers}.`, variant: "destructive" });
+      return;
+    }
+
+    const botNames = [
+      "Bot Alice", "Bot Bob", "Bot Charlie", "Bot Diana", "Bot Eve", "Bot Frank", 
+      "Bot Grace", "Bot Henry", "Bot Ivy", "Bot Jack", "Bot Kate", "Bot Leo"
+    ];
+    
+    // Find an unused bot name
+    const usedNames = gameState.players.map(p => p.name);
+    const availableBotName = botNames.find(name => !usedNames.includes(name)) || `Bot ${generateShortId(4)}`;
+
+    const botPlayer: Player = {
+      id: `bot_${generateShortId(8)}`,
+      name: availableBotName,
+      role: "ClueHolder" as Role, // Default, will be reassigned
+      isHost: false,
+      isAlive: true,
+      clue: null,
+      score: 0,
+      isRevealedImposter: false,
+    };
+
+    const gameDocRef = doc(db, "games", gameState.gameId);
+    try {
+      await runTransaction(db, async (transaction) => {
+        const gameSnap = await transaction.get(gameDocRef);
+        if (!gameSnap.exists()) {
+          throw new Error("Game not found");
+        }
+        
+        const currentGameData = gameSnap.data() as GameState;
+        if (currentGameData.players.length >= currentGameData.maxPlayers) {
+          throw new Error("Lobby is full");
+        }
+        if (currentGameData.status !== 'lobby') {
+          throw new Error("Game is not in lobby state");
+        }
+
+        const updatedPlayers = [...currentGameData.players, botPlayer];
+        const updatedScoresSnapshot = {
+          ...currentGameData.playerScoresBeforeRound,
+          [botPlayer.id]: 0
+        };
+
+        transaction.update(gameDocRef, {
+          players: updatedPlayers,
+          actualPlayerCount: updatedPlayers.length,
+          playerScoresBeforeRound: updatedScoresSnapshot,
+          gameLog: arrayUnion(`Bot ${botPlayer.name} joined the game.`)
+        });
+      });
+
+      toast({ title: "Bot Added", description: `${botPlayer.name} joined the lobby!` });
+    } catch (error) {
+      console.error("Error adding bot:", error);
+      toast({ title: "Error Adding Bot", description: (error as Error).message, variant: "destructive" });
+    }
+  };
 
   const contextValue = useMemo(() => ({
     gameState,
@@ -745,6 +849,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     updatePlayerInContext,
     startNewRound,
     updateGameSettings,
+    addBot,
   }), [gameState, localPlayerId, isLoading, isInitialized, toast]); // Ensure toast is stable or memoized if it causes re-renders
 
   return (

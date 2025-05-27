@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useEffect, useState } from 'react';
@@ -11,14 +10,14 @@ import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Users, Play, Copy, LogOut, Settings, Image as ImageIcon, FileText } from 'lucide-react';
+import { Loader2, Users, Play, Copy, LogOut, Settings, Image as ImageIcon, FileText, Bot } from 'lucide-react';
 import type { GameMode } from '@/lib/types';
 
 export default function LobbyPage() {
   const router = useRouter();
   const params = useParams();
   const gameId = Array.isArray(params.gameId) ? params.gameId[0] : params.gameId;
-  const { gameState, localPlayerId, isLoading, startGameAI, leaveGame, updateGameSettings } = useGame();
+  const { gameState, localPlayerId, isLoading, startGameAI, leaveGame, updateGameSettings, addBot } = useGame();
   const { toast } = useToast();
   const [isStartingGame, setIsStartingGame] = useState(false);
 
@@ -122,6 +121,18 @@ export default function LobbyPage() {
                 </div>
               </RadioGroup>
             </div>
+            <div className="flex gap-2 pt-2">
+              <Button 
+                onClick={addBot}
+                disabled={gameState.players.length >= gameState.maxPlayers}
+                variant="outline"
+                size="sm"
+                className="bg-secondary hover:bg-secondary/80"
+              >
+                <Users className="mr-2 h-4 w-4" />
+                Add Bot {gameState.players.length >= gameState.maxPlayers ? '(Full)' : ''}
+              </Button>
+            </div>
           </div>
         )}
         {!isHost && (
@@ -147,10 +158,14 @@ export default function LobbyPage() {
             <ul className="space-y-3">
               {gameState.players.map((player) => (
                 <li key={player.id} className="flex items-center justify-between p-3 bg-card rounded-lg shadow">
-                  <span className="font-medium text-lg text-foreground">{player.name}</span>
+                  <div className="flex items-center">
+                    {player.id.startsWith('bot_') && <Bot className="mr-2 h-4 w-4 text-muted-foreground" />}
+                    <span className="font-medium text-lg text-foreground">{player.name}</span>
+                  </div>
                   <div>
                     {player.isHost && <Badge variant="default" className="bg-accent text-accent-foreground mr-2">Host</Badge>}
                     {player.id === localPlayerId && <Badge variant="outline">You</Badge>}
+                    {player.id.startsWith('bot_') && <Badge variant="secondary" className="bg-blue-100 text-blue-800">Bot</Badge>}
                   </div>
                 </li>
               ))}
