@@ -23,13 +23,13 @@ const GenerateImagesInputSchema = z.object({
 export type GenerateImagesInput = z.infer<typeof GenerateImagesInputSchema>;
 
 const GenerateImagesOutputSchema = z.object({
-  targetItemDescription: z.string().describe('The text description of the selected target image/object. This description should be simple and commonly known (e.g., "a red apple", "a wooden chair", "a blue ball").'),
+  targetItemDescription: z.string().describe('The text description of the selected target image/object. This description should be simple and commonly known (e.g., "a red apple", "a wooden chair", "a blue ball"). It MUST be one of the input object descriptions.'),
   items: z.array(
     z.object({
       imageUrl: z.string().url().describe("The data URI of the generated image. Expected format: 'data:image/png;base64,<encoded_data>'."),
-      text: z.string().describe('The text description of the generated image/object. Each description should be for a simple, common object and distinct from others (e.g., "a ripe banana", "a fluffy white cloud", "a vintage toy car"). Each description should be a short phrase. Avoid full sentences or questions.'),
+      text: z.string().describe('The text description of the generated image/object. This MUST be the exact corresponding input description string.'),
     })
-  ).length(4).describe('The list of generated images and their descriptions. All objects should be simple, commonly known, and distinct. There should be exactly 4 items.'),
+  ).length(4).describe('The list of generated images and their descriptions. Each "text" field must correspond to an input object description. There should be exactly 4 items.'),
   clueHolderClue: z
     .string()
     .describe('A single, vague, one-word clue for the clue holder, related to the target object. This clue MUST be a single word. It should also plausibly relate to 2-3 other objects in the generated items list to create ambiguity.'),
@@ -54,7 +54,7 @@ const generateObjectDescriptionsPrompt = ai.definePrompt({
     output: { schema: z.object({ objectDescriptions: z.array(z.string()).length(4) }) },
     prompt: `Generate exactly {{numberOfObjects}} distinct descriptions of simple, common, everyday objects.
 Each description should be 2-4 words long (e.g., "a red apple", "a blue bicycle", "a yellow pencil", "a green plant").
-The objects must be visually distinct and easily recognizable.
+The objects MUST be visually distinct, easily recognizable, and common knowledge. Avoid niche or complex items.
 Respond STRICTLY with a JSON object containing a single key "objectDescriptions" which is an array of these strings.
 Example response: {"objectDescriptions": ["a fluffy cat", "a steaming coffee cup", "a worn leather book", "a shiny silver key"]}`
 });
@@ -67,52 +67,55 @@ const generateImagesAndCluesFlow = ai.defineFlow(
     outputSchema: GenerateImagesOutputSchema,
   },
   async (input: GenerateImagesInput): Promise<GenerateImagesOutput> => {
-    let objectDescriptionsResponse;
+    let objectDescriptions: string[];
     try {
         const descResult = await generateObjectDescriptionsPrompt({numberOfObjects: input.numberOfImages});
-        objectDescriptionsResponse = descResult.output;
-        if (!objectDescriptionsResponse || !objectDescriptionsResponse.objectDescriptions || objectDescriptionsResponse.objectDescriptions.length !== input.numberOfImages) {
+        const output = descResult.output;
+        if (!output || !output.objectDescriptions || output.objectDescriptions.length !== input.numberOfImages) {
             throw new Error('Failed to generate a valid list of object descriptions.');
         }
+        objectDescriptions = output.objectDescriptions;
     } catch (e) {
         console.error("Error generating object descriptions, using fallback:", e);
         const fallbackDescriptions = ["a red apple", "a blue ball", "a yellow banana", "a green pear"];
-        objectDescriptionsResponse = { objectDescriptions: fallbackDescriptions.slice(0, input.numberOfImages) };
+        objectDescriptions = fallbackDescriptions.slice(0, input.numberOfImages);
     }
     
-    const descriptions = objectDescriptionsResponse.objectDescriptions;
-
-    // Generate images and clues based on these descriptions
     const imageGenAndCluePrompt = ai.definePrompt({
         name: 'imageGenAndCluePrompt',
         input: { schema: z.object({ objectDescriptions: z.array(z.string()) }) },
-        output: { schema: GenerateImagesOutputSchema }, // Output schema is the main one for the flow
+        output: { schema: GenerateImagesOutputSchema },
         prompt: `You are an assistant for a social deduction game.
-You are given a list of {{objectDescriptions.length}} object descriptions:
+You are given a list of {{objectDescriptions.length}} object descriptions for simple, common, everyday objects:
 {{#each objectDescriptions}}
 - {{this}}
 {{/each}}
 
 Your tasks are:
-1. For each description, generate an image using the 'googleai/gemini-2.0-flash-exp' model. The image should clearly depict the object.
-   The output should be an array of objects, where each object contains the 'text' (original description) and 'imageUrl' (the generated image data URI).
-   Example for one item: { "text": "a red apple", "imageUrl": "{{media prompt='a red apple' model='googleai/gemini-2.0-flash-exp' config='{\"responseModalities\": [\"TEXT\", \"IMAGE\"]}'}}" }
+1. For each input description, generate an image using the 'googleai/gemini-2.0-flash-exp' model. The image should clearly depict the described simple object.
+   The output 'items' array should contain objects, where each object has:
+     - 'text': This MUST be the exact corresponding input description string from the list above.
+     - 'imageUrl': The generated image data URI using the media helper.
+   Example for one item (if input description was "a red apple"): { "text": "a red apple", "imageUrl": "{{media prompt='a red apple' model='googleai/gemini-2.0-flash-exp' config='{\"responseModalities\": [\"TEXT\", \"IMAGE\"]}'}}" }
 
-2. From the provided object descriptions, select one as the 'targetItemDescription'. This should be one of the exact descriptions from the input list.
+2. From the provided input object descriptions, select one as the 'targetItemDescription'. This MUST be one of the exact descriptions from the input list.
 
 3. Create a single, vague, one-word clue for a 'clueHolder'.
    - This clue MUST be a single word.
    - It must be related to the 'targetItemDescription'.
    - Crucially, this clue should also plausibly relate to 1-2 other objects from the provided descriptions to create ambiguity. Avoid direct synonyms.
 
-Respond STRICTLY with a JSON object matching the output schema. Ensure 'items' is an array of objects with 'text' and 'imageUrl', 'targetItemDescription' is a string from the input descriptions, and 'clueHolderClue' is a single string (one word).
+Respond STRICTLY with a JSON object matching the output schema.
+Ensure 'items' is an array of objects with 'text' (matching input descriptions) and 'imageUrl'.
+Ensure 'targetItemDescription' is a string from the input descriptions.
+Ensure 'clueHolderClue' is a single string (one word).
 
-Input descriptions:
+Input descriptions to use for 'text' fields and 'targetItemDescription':
 {{#each objectDescriptions as |desc|}}
 - {{desc}}
 {{/each}}
 
-Output format (ensure imageUrl uses the media helper correctly for each item in the items array):
+Output format (ensure imageUrl uses the media helper correctly for each item in the items array, and 'text' is the original description):
 {
   "targetItemDescription": "...",
   "items": [
@@ -127,73 +130,83 @@ Output format (ensure imageUrl uses the media helper correctly for each item in 
   "clueHolderClue": "..."
 }
 `,
-        config: {
-            // Safety settings can be adjusted here if needed, e.g., for image generation
-            // safetySettings: [{ category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' }]
-        }
     });
 
-    let finalOutput: GenerateImagesOutput | null = null;
+    let aiCallOutput: GenerateImagesOutput | null = null;
     try {
-        const result = await imageGenAndCluePrompt({ objectDescriptions: descriptions });
-        finalOutput = result.output;
+        const result = await imageGenAndCluePrompt({ objectDescriptions });
+        aiCallOutput = result.output;
 
-        if (!finalOutput || !finalOutput.items || finalOutput.items.length !== input.numberOfImages || !finalOutput.targetItemDescription || !finalOutput.clueHolderClue) {
-            throw new Error('AI output for images and clues is malformed or incomplete.');
+        if (!aiCallOutput || !aiCallOutput.items || aiCallOutput.items.length !== input.numberOfImages || !aiCallOutput.targetItemDescription || !aiCallOutput.clueHolderClue) {
+            throw new Error('AI output for images and clues is malformed or incomplete based on schema.');
         }
-
-        // Validate that all items have an imageUrl
-        for (const item of finalOutput.items) {
-            if (!item.imageUrl || !item.imageUrl.startsWith('data:image')) {
-                console.warn(`Generated item "${item.text}" is missing a valid imageUrl. Will use placeholder.`);
-                item.imageUrl = `https://placehold.co/300x300.png?text=${encodeURIComponent(item.text)}`; // Fallback placeholder
-            }
-             // Basic cleanup for descriptions from AI
-            item.text = item.text.trim().replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '').replace(/\s+/g, ' ');
-            if (item.text.length < 2 || item.text.length > 50 || item.text.includes('\n') || item.text.split(' ').length > 5) {
-                 console.warn(`AI generated an invalid description: "${item.text}". Replacing with a generic one.`);
-                 item.text = "Generated Object";
-            }
-        }
-        finalOutput.targetItemDescription = finalOutput.targetItemDescription.trim().replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '').replace(/\s+/g, ' ');
-        finalOutput.clueHolderClue = finalOutput.clueHolderClue.trim().split(' ')[0].replace(/^[^a-zA-Z0-9'-]+|[^a-zA-Z0-9'-]+$/g, '');
-
-
     } catch (e) {
-        console.error("Error generating images/clues or parsing output, using fallback:", e);
-        // Fallback logic
-        const fallbackTargetDesc = descriptions[0] || "Fallback Object";
-        finalOutput = {
-            targetItemDescription: fallbackTargetDesc,
-            items: descriptions.map(desc => ({
-                text: desc,
-                imageUrl: `https://placehold.co/300x300.png?text=${encodeURIComponent(desc)}` // Fallback placeholder
-            })).slice(0, input.numberOfImages),
-            clueHolderClue: "Abstract",
-        };
-         // Ensure items has the correct length for fallback
-        while (finalOutput.items.length < input.numberOfImages) {
-            const placeholderText = `Placeholder ${finalOutput.items.length + 1}`;
-            finalOutput.items.push({
-                text: placeholderText,
-                imageUrl: `https://placehold.co/300x300.png?text=${encodeURIComponent(placeholderText)}`
-            });
+        console.error("Error in imageGenAndCluePrompt or its output parsing:", e);
+        // aiCallOutput remains null, will trigger full fallback below
+    }
+
+    const processedItems: { text: string; imageUrl: string }[] = [];
+    let finalTargetDescription: string;
+    let finalClueHolderClue: string;
+
+    if (aiCallOutput) {
+        // Process items from AI output, ensuring text comes from original descriptions
+        for (let i = 0; i < input.numberOfImages; i++) {
+            const originalDesc = objectDescriptions[i]; // Use original description as source of truth for text
+            const aiItemData = aiCallOutput.items[i]; // Assuming AI returns items in the same order
+
+            let imageUrl = aiItemData?.imageUrl;
+            if (!imageUrl || !imageUrl.startsWith('data:image')) {
+                console.warn(`Item "${originalDesc}" had invalid/missing imageUrl. Using placeholder.`);
+                imageUrl = `https://placehold.co/300x300.png`; // Corrected placeholder
+            }
+            processedItems.push({ text: originalDesc, imageUrl });
         }
+
+        // Validate and clean target description
+        finalTargetDescription = aiCallOutput.targetItemDescription.trim().replace(/^[^a-zA-Z0-9\s'-]+|[^a-zA-Z0-9\s'-]+$/g, '').replace(/\s+/g, ' ');
+        if (!objectDescriptions.some(desc => desc.toLowerCase() === finalTargetDescription.toLowerCase())) {
+            console.warn(`AI target description "${aiCallOutput.targetItemDescription}" (cleaned: "${finalTargetDescription}") not found in original descriptions. Selecting first original description as target.`);
+            finalTargetDescription = objectDescriptions[0];
+        }
+
+        // Clean clue
+        finalClueHolderClue = aiCallOutput.clueHolderClue.trim().split(' ')[0].replace(/^[^a-zA-Z0-9'-]+|[^a-zA-Z0-9'-]+$/g, '');
+         if (!finalClueHolderClue) {
+            console.warn("AI clue was empty after cleaning. Using fallback clue 'Vague'.");
+            finalClueHolderClue = "Vague";
+        }
+
+    } else {
+        // Full fallback if aiCallOutput is null (e.g., major AI error)
+        console.warn("AI call for imageGenAndCluePrompt failed or output was null. Using full fallback for items, target, and clue.");
+        objectDescriptions.forEach(desc => {
+            processedItems.push({ text: desc, imageUrl: `https://placehold.co/300x300.png` });
+        });
+        finalTargetDescription = objectDescriptions[0] || "Error Object";
+        finalClueHolderClue = "Abstract";
     }
     
-    // Ensure targetItemDescription is one of the item descriptions
-    const targetExists = finalOutput.items.some(item => item.text.toLowerCase() === finalOutput!.targetItemDescription.toLowerCase());
-    if (!targetExists) {
-        console.warn(`Target description "${finalOutput.targetItemDescription}" not found in generated items. Selecting first item as target.`);
-        if (finalOutput.items.length > 0) {
-            finalOutput.targetItemDescription = finalOutput.items[0].text;
-        } else {
-            // This case should be rare due to fallback logic ensuring items array is populated
-            finalOutput.targetItemDescription = "Fallback Target"; 
+    // Ensure correct number of items in the final list, even if fallbacks were incomplete
+    while (processedItems.length < input.numberOfImages) {
+        const placeholderText = `Object ${processedItems.length + 1}`;
+        console.warn(`Processed items length ${processedItems.length} less than required ${input.numberOfImages}. Adding placeholder: ${placeholderText}`);
+        processedItems.push({
+            text: placeholderText,
+            imageUrl: `https://placehold.co/300x300.png`
+        });
+        if (processedItems.length === 1 && (!finalTargetDescription || finalTargetDescription === "Error Object")) {
+            finalTargetDescription = placeholderText; // Ensure a target if we only have placeholders
         }
     }
 
 
-    return finalOutput!;
+    return {
+        targetItemDescription: finalTargetDescription,
+        items: processedItems.slice(0, input.numberOfImages), // Ensure exactly numberOfImages items
+        clueHolderClue: finalClueHolderClue,
+    };
   }
 );
+
+    
