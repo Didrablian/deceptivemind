@@ -48,7 +48,7 @@ export default function RoleRevealScreen({ player, targetWord, onContinue }: Rol
                 The Secret Word is: <span className="text-accent">{targetWord}</span>
             </p>
           )}
-          {((player.role === "Helper" || player.role === "ClueHolder") && player.clue) && (
+          {player.role === "ClueHolder" && player.clue && (
             <p className="mt-3 text-center text-md">
                 Your Secret Clue: <span className="italic text-primary">{player.clue}</span>
             </p>
@@ -75,3 +75,5 @@ export default function RoleRevealScreen({ player, targetWord, onContinue }: Rol
     </div>
   );
 }
+
+    

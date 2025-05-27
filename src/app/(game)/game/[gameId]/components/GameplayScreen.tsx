@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/componen
 import { Badge } from '@/components/ui/badge';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import type { Player, GameWord, GameState, Role } from '@/lib/types';
-import { Send, Users, ShieldAlert, HelpCircle, Eye, MessageSquare, Loader2, Trash2, CheckSquare, ZoomIn } from 'lucide-react';
+import { Send, Users, ShieldAlert, HelpCircle, Eye, MessageSquare, Loader2, Trash2, CheckSquare, ZoomIn, CheckCircle2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 const WordDisplay: React.FC<{
@@ -18,30 +18,23 @@ const WordDisplay: React.FC<{
   player: Player,
   isCommunicator: boolean,
   onEliminate?: (wordText: string) => void,
-  onSelectForLockIn?: (wordText: string) => void,
-  isSelectedForLockIn?: boolean,
+  onConfirmTarget?: (wordText: string) => void, // New prop for communicator confirming target
   gameStatus: GameState['status'],
-}> = ({ word, player, isCommunicator, onEliminate, onSelectForLockIn, isSelectedForLockIn, gameStatus }) => {
+}> = ({ word, player, isCommunicator, onEliminate, onConfirmTarget, gameStatus }) => {
   const knowsTarget = player.role === 'Helper' || player.role === 'Imposter';
   let highlightClass = knowsTarget && word.isTarget ? 'bg-accent/20 border-accent ring-2 ring-accent' : 'bg-card hover:bg-secondary/30';
   if (word.isEliminated) {
     highlightClass = 'bg-muted/50 text-muted-foreground line-through opacity-70';
-  } else if (isSelectedForLockIn) {
-    highlightClass = 'ring-2 ring-primary bg-primary/10';
   }
 
   const canEliminate = isCommunicator && !word.isEliminated && (gameStatus === 'discussion' || gameStatus === 'word-elimination');
-  const canSelectForLockIn = !isCommunicator && !word.isEliminated && (gameStatus === 'discussion' || gameStatus === 'word-elimination');
+  // Communicator can confirm target if not eliminated and in discussion/elimination phase
+  const canConfirmTarget = isCommunicator && !word.isEliminated && (gameStatus === 'discussion' || gameStatus === 'word-elimination');
+
 
   return (
     <div
-      className={`p-3 rounded-lg shadow text-center font-medium text-lg transition-all relative ${highlightClass} ${ (canEliminate || canSelectForLockIn) ? 'cursor-pointer' : ''}`}
-      onClick={() => {
-        if (canSelectForLockIn && onSelectForLockIn) {
-          onSelectForLockIn(word.text);
-        }
-        // Elimination is handled by a specific button now
-      }}
+      className={`p-3 rounded-lg shadow text-center font-medium text-lg transition-all relative ${highlightClass} ${ (canEliminate || canConfirmTarget) ? 'cursor-pointer' : ''}`}
     >
       {word.text}
       {knowsTarget && word.isTarget && !word.isEliminated && <Badge variant="outline" className="ml-2 border-accent text-accent text-xs">TARGET</Badge>}
@@ -68,6 +61,28 @@ const WordDisplay: React.FC<{
           </AlertDialogContent>
         </AlertDialog>
       )}
+      {/* New Button for Communicator to Confirm Target */}
+      {canConfirmTarget && onConfirmTarget && (
+         <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button variant="default" size="sm" className="absolute bottom-1 left-1 opacity-80 hover:opacity-100 bg-green-600 hover:bg-green-700" onClick={(e) => e.stopPropagation()}>
+              <CheckCircle2 className="w-3 h-3"/>
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Confirm "{word.text}" as Target?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will be the team's final guess. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel onClick={(e) => e.stopPropagation()}>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={(e) => {e.stopPropagation(); onConfirmTarget(word.text);}} className="bg-green-600 hover:bg-green-700">Confirm as Target</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
     </div>
   );
 };
@@ -84,16 +99,25 @@ const PlayerCard: React.FC<{
   let roleIsVisible = false;
 
   if (player.role === 'Communicator') {
-    roleIsVisible = true;
+    roleIsVisible = true; // Communicator role always visible
   } else if (isLocalPlayer) {
-    roleIsVisible = true;
+    roleIsVisible = true; // Player always sees their own role
   } else if (gameStatus === 'finished') {
-    roleIsVisible = true;
+    roleIsVisible = true; // All roles visible at game end
   } else if (player.isRevealedImposter && player.role === 'Imposter') {
-    roleIsVisible = true; 
+    roleIsVisible = true; // Revealed imposters are visible
   } else if (gameStatus === 'post-guess-reveal') {
+    // During post-guess reveal:
+    // - Non-imposters see all roles
+    // - Imposters only see Communicator, themselves, and other revealed imposters
     if (localPlayerRole && localPlayerRole !== 'Imposter') {
       roleIsVisible = true;
+    } else if (localPlayerRole === 'Imposter') {
+      // Imposters only see their own role and Communicator (already covered), and other revealed imposters
+      // This case implicitly handles not showing Helper/ClueHolder to Imposter here
+       if (player.role === 'Communicator' || (player.isRevealedImposter && player.role === 'Imposter')) {
+         roleIsVisible = true;
+       }
     }
   }
 
@@ -119,10 +143,10 @@ const PlayerCard: React.FC<{
         {isLocalPlayer && <Badge variant="outline">(You)</Badge>}
         
         {(() => {
-          if (player.isRevealedImposter && player.role === 'Imposter' && !isLocalPlayer) {
-             return <Badge variant="destructive" className="text-xs">Imposter</Badge>;
-          }
-          if (roleIsVisible && player.role) { // Check if player.role is defined
+          if (roleIsVisible && player.role) { 
+             if (player.isRevealedImposter && player.role === 'Imposter' && !isLocalPlayer) { // Explicitly show revealed imposter
+                return <Badge variant="destructive" className="text-xs">Imposter</Badge>;
+             }
             return <Badge variant="secondary" className="text-xs">{player.role}</Badge>;
           }
           return null;
@@ -153,9 +177,9 @@ const PlayerCard: React.FC<{
 
 
 export default function GameplayScreen() {
-  const { gameState, localPlayerId, sendChatMessage, eliminateWord, lockInWord, imposterAccuseHelperInTwist, isLoading } = useGame();
+  const { gameState, localPlayerId, sendChatMessage, eliminateWord, communicatorConfirmTarget, imposterAccuseHelperInTwist, isLoading } = useGame();
   const [chatInput, setChatInput] = useState('');
-  const [selectedWordToLockIn, setSelectedWordToLockIn] = useState<string | null>(null);
+  // const [selectedWordToLockIn, setSelectedWordToLockIn] = useState<string | null>(null); // No longer needed for general players
   const { toast } = useToast();
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
@@ -176,15 +200,13 @@ export default function GameplayScreen() {
 
   const handleSendChat = async () => {
     if (!chatInput.trim()) return;
-    if (localPlayer.role === "Communicator" && gameState.status !== "post-guess-reveal" && gameState.status !== "finished") {
-      toast({ title: "Communicator Restriction", description: "Communicators guide via eliminations, not chat, until post-guess reveal or game end.", variant: "default" });
-      return;
-    }
+    // Communicator can now chat, so restriction is removed
     await sendChatMessage(chatInput.trim());
     setChatInput('');
   };
 
   const handleEliminateWord = async (wordText: string) => {
+    // This logic remains for communicator eliminating decoys
     if (localPlayer.role !== 'Communicator') {
       toast({title: "Invalid Action", description: "Only the Communicator can eliminate words.", variant: "destructive"});
       return;
@@ -196,21 +218,16 @@ export default function GameplayScreen() {
     await eliminateWord(wordText);
   };
 
-  const handleLockInWord = async () => {
-    if (!selectedWordToLockIn) {
-      toast({title: "No Word Selected", description: "Please select a word from the grid to lock in.", variant: "default"});
-      return;
-    }
-     if (localPlayer.role === 'Communicator') {
-      toast({title: "Invalid Action", description: "Communicator eliminates words, others lock them in.", variant: "destructive"});
+  const handleCommunicatorConfirmTarget = async (wordText: string) => {
+    if (localPlayer.role !== 'Communicator') {
+      toast({title: "Invalid Action", description: "Only the Communicator can confirm the target word.", variant: "destructive"});
       return;
     }
     if (gameState.status !== 'discussion' && gameState.status !== 'word-elimination') {
-       toast({title: "Invalid Phase", description: "Words can only be locked-in during discussion/elimination phase.", variant: "destructive"});
+       toast({title: "Invalid Phase", description: "Target can only be confirmed during discussion/elimination phase.", variant: "destructive"});
       return;
     }
-    await lockInWord(selectedWordToLockIn);
-    setSelectedWordToLockIn(null); // Reset selection
+    await communicatorConfirmTarget(wordText);
   };
 
   const handleImposterAccuseHelper = async (accusedPlayerId: string) => {
@@ -219,7 +236,7 @@ export default function GameplayScreen() {
 
   const isCommunicator = localPlayer.role === 'Communicator';
   const isImposterDuringTwist = localPlayer.role === 'Imposter' && gameState.status === 'post-guess-reveal';
-  const canChat = !(localPlayer.role === "Communicator" && gameState.status !== "post-guess-reveal" && gameState.status !== "finished");
+  const canChat = true; // Communicator can always chat now
 
   return (
     <div className="flex flex-col lg:flex-row gap-4 h-full flex-grow p-1 sm:p-4 bg-background rounded-lg shadow-inner">
@@ -234,7 +251,7 @@ export default function GameplayScreen() {
               key={p.id}
               player={p}
               isLocalPlayer={p.id === localPlayer.id}
-              localPlayerRole={localPlayer.role}
+              localPlayerRole={localPlayer.role} // Pass localPlayer's role
               isAccuserRole={isImposterDuringTwist}
               onAccuseHelper={handleImposterAccuseHelper}
               gameStatus={gameState.status}
@@ -273,30 +290,23 @@ export default function GameplayScreen() {
               player={localPlayer}
               isCommunicator={isCommunicator}
               onEliminate={isCommunicator ? handleEliminateWord : undefined}
-              onSelectForLockIn={!isCommunicator ? setSelectedWordToLockIn : undefined}
-              isSelectedForLockIn={selectedWordToLockIn === wordObj.text}
+              onConfirmTarget={isCommunicator ? handleCommunicatorConfirmTarget : undefined} // Pass new handler
               gameStatus={gameState.status}
             />
           ))}
         </CardContent>
         <CardFooter className="p-4 border-t flex-col space-y-2">
-          {localPlayer.clue && (
+          {localPlayer.clue && ( // Only ClueHolders will have a clue now
             <div className="text-center w-full mb-2">
                 <div className="text-sm text-muted-foreground">Your Clue:</div>
                 <div className="font-semibold text-primary italic">{localPlayer.clue}</div>
             </div>
           )}
-          {(gameState.status === 'discussion' || gameState.status === 'word-elimination') && !isCommunicator && (
-             <Button
-                onClick={handleLockInWord}
-                className="w-full bg-accent text-accent-foreground hover:bg-accent/90"
-                disabled={!selectedWordToLockIn}
-             >
-                <CheckSquare className="mr-2 h-4 w-4" /> Lock In "{selectedWordToLockIn || 'Word'}"
-             </Button>
-          )}
+          {/* Removed general player lock-in button */}
           {localPlayer.role === 'Communicator' && (gameState.status === 'discussion' || gameState.status === 'word-elimination') && (
-            <div className="text-xs text-center text-muted-foreground w-full">As Communicator, click the <Trash2 className="inline h-3 w-3"/> on a word to eliminate it.</div>
+            <div className="text-xs text-center text-muted-foreground w-full">
+              As Communicator: <Trash2 className="inline h-3 w-3 text-destructive"/> to eliminate, <CheckCircle2 className="inline h-3 w-3 text-green-600"/> to confirm target.
+            </div>
           )}
         </CardFooter>
       </Card>
@@ -309,7 +319,7 @@ export default function GameplayScreen() {
         <CardContent ref={chatScrollRef} className="flex-grow overflow-y-auto space-y-3 p-2 sm:p-4 bg-secondary/10">
           {gameState.chatMessages.map(msg => (
             <div key={msg.id} className={`flex flex-col ${msg.playerId === localPlayerId ? 'items-end' : 'items-start'}`}>
-              <div className={`max-w-[80%] p-2 rounded-lg ${msg.playerId === localPlayerId ? 'bg-primary text-primary-foreground' : 'bg-card text-card-foreground shadow'}`}>
+              <div className={`max-w-[80%] p-2 rounded-lg ${msg.playerId === localPlayerId ? 'bg-primary text-primary-foreground' : (msg.playerId === 'SYSTEM_GAME_EVENT' ? 'bg-amber-100 text-amber-800' : 'bg-card text-card-foreground shadow')}`}>
                 <p className="text-xs font-semibold opacity-80 mb-0.5">{msg.playerName}{msg.playerId === localPlayerId ? ' (You)' : ''}</p>
                 <p className="text-sm">{msg.text}</p>
               </div>
@@ -324,10 +334,10 @@ export default function GameplayScreen() {
           <form onSubmit={(e) => { e.preventDefault(); handleSendChat(); }} className="flex gap-2">
             <Input
               type="text"
-              placeholder={!canChat ? "Communicators guide via eliminations..." : "Type your message..."}
+              placeholder={"Type your message..."} // Communicator can always chat
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
-              disabled={!canChat}
+              disabled={!canChat} // canChat is now always true
               className="flex-grow"
             />
             <Button type="submit" size="icon" disabled={!canChat} className="bg-primary text-primary-foreground hover:bg-primary/90">
@@ -339,3 +349,5 @@ export default function GameplayScreen() {
     </div>
   );
 }
+
+    
