@@ -2,15 +2,16 @@
 "use client";
 
 import React from 'react';
-import type { Player } from '@/lib/types';
+import type { Player, GameMode } from '@/lib/types'; // Added GameMode
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { getRoleExplanation } from '@/lib/gameUtils';
-import { Eye, UserCheck, UserX, Info, Zap, KeyRound, ShieldQuestion, Users } from 'lucide-react'; // Added Users
+import { Eye, UserCheck, UserX, Users, ShieldQuestion } from 'lucide-react';
 
 interface RoleRevealScreenProps {
   player: Player;
-  targetWord?: string;
+  targetItemDescription?: string; // Changed from targetWord
+  gameMode: GameMode; // Added gameMode
   onContinue: () => void;
 }
 
@@ -20,12 +21,14 @@ const RoleIcon: React.FC<{ role: Player['role'] }> = ({ role }) => {
     case 'Helper': return <UserCheck className="w-8 h-8 text-green-500" />;
     case 'Imposter': return <UserX className="w-8 h-8 text-destructive" />;
     case 'ClueHolder': return <ShieldQuestion className="w-8 h-8 text-yellow-500" />;
-    default: return <Users className="w-8 h-8 text-muted-foreground" />; // Changed default icon
+    default: return <Users className="w-8 h-8 text-muted-foreground" />;
   }
 };
 
-export default function RoleRevealScreen({ player, targetWord, onContinue }: RoleRevealScreenProps) {
-  const roleExplanation = getRoleExplanation(player.role, targetWord, player.clue);
+export default function RoleRevealScreen({ player, targetItemDescription, gameMode, onContinue }: RoleRevealScreenProps) {
+  const roleExplanation = getRoleExplanation(player.role, targetItemDescription, player.clue, gameMode); // Pass gameMode
+  const itemType = gameMode === 'images' ? "Secret Item" : "Secret Word";
+
 
   return (
     <div className="fixed inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
@@ -43,9 +46,9 @@ export default function RoleRevealScreen({ player, targetWord, onContinue }: Rol
           <div className="bg-secondary/50 p-4 rounded-md whitespace-pre-line text-center text-secondary-foreground">
             {roleExplanation}
           </div>
-          {(player.role === "Helper" || player.role === "Imposter") && targetWord && (
+          {(player.role === "Helper" || player.role === "Imposter") && targetItemDescription && (
              <p className="mt-4 text-center font-semibold text-lg">
-                The Secret Word is: <span className="text-accent">{targetWord}</span>
+                The {itemType} is: <span className="text-accent">{targetItemDescription}</span>
             </p>
           )}
           {player.role === "ClueHolder" && player.clue && (
@@ -75,5 +78,3 @@ export default function RoleRevealScreen({ player, targetWord, onContinue }: Rol
     </div>
   );
 }
-
-    

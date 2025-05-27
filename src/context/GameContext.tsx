@@ -3,11 +3,12 @@
 
 import type { ReactNode } from 'react';
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
-import { doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, increment, runTransaction, Timestamp, deleteDoc, FieldValue } from 'firebase/firestore';
+import { doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, increment, runTransaction, Timestamp, FieldValue, deleteDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import type { GameState, Player, GameWord, ChatMessage, Role, GameStatus } from '@/lib/types';
+import type { GameState, Player, GameItem, ChatMessage, Role, GameStatus, GameMode, AIGameDataOutput } from '@/lib/types';
 import { initialGameState, generateShortId, assignRolesAndClues, calculateScores, shuffleArray } from '@/lib/gameUtils';
 import { generateWordsAndClues } from '@/ai/flows/generate-words-and-clues';
+import { generateImagesAndClues } from '@/ai/flows/generate-images-and-clues'; // New AI flow
 import { useToast } from '@/hooks/use-toast';
 
 interface GameContextProps {
@@ -21,12 +22,13 @@ interface GameContextProps {
   startGameAI: () => Promise<void>;
   sendChatMessage: (text: string) => Promise<void>;
   leaveGame: () => Promise<void>;
-  eliminateWord: (wordText: string) => Promise<void>;
-  communicatorConfirmTarget: (wordText: string) => Promise<void>; // Renamed from lockInWord
+  eliminateItem: (itemIdentifierText: string) => Promise<void>; // Renamed
+  communicatorConfirmTargetItem: (itemIdentifierText: string) => Promise<void>; // Renamed
   imposterAccuseHelperInTwist: (accusedPlayerId: string) => Promise<void>;
   acknowledgeRole: () => Promise<void>;
   updatePlayerInContext: (playerData: Partial<Player> & { id: string }) => Promise<void>;
   startNewRound: () => Promise<void>;
+  updateGameSettings: (settings: { gameMode: GameMode }) => Promise<void>; // New
 }
 
 const GameContext = createContext<GameContextProps | undefined>(undefined);
@@ -100,13 +102,14 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           winner: data.winner === undefined ? null : data.winner,
           winningReason: data.winningReason === undefined ? "" : data.winningReason,
           gameLog: data.gameLog || [],
-          words: data.words || [],
+          items: data.items || [], // Changed from words to items
           playerScoresBeforeRound: data.playerScoresBeforeRound || {},
+          gameMode: data.gameMode || 'words', // Added gameMode
+          numberOfItems: data.numberOfItems || (data.gameMode === 'images' ? 4 : 9), // Added numberOfItems
         };
         setGameState(processedData);
       } else {
         setGameState(null);
-        // toast({ title: "Game Ended", description: "This game session no longer exists.", variant: "default"});
       }
       setIsLoading(false);
     }, (error) => {
@@ -135,12 +138,11 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       toast({ title: "Context not ready", description: "Player ID not available. Please refresh.", variant: "destructive"});
       return null;
     }
-
     const newGameId = generateShortId(6).toUpperCase();
     const hostPlayer: Player = {
       id: localPlayerId,
       name: username,
-      role: "ClueHolder", 
+      role: "ClueHolder" as Role, // Default role, will be reassigned
       isHost: true,
       isAlive: true,
       clue: null,
@@ -149,7 +151,6 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     };
     const newGame = initialGameState(newGameId, hostPlayer);
     newGame.playerScoresBeforeRound = { [hostPlayer.id]: 0 };
-
 
     try {
       const gameDocRef = doc(db, "games", newGameId);
@@ -163,7 +164,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
   };
 
   const joinGame = async (gameIdToJoin: string, username: string): Promise<boolean> => {
-    if (!isInitialized || !localPlayerId) {
+     if (!isInitialized || !localPlayerId) {
       toast({ title: "Context not ready", description: "Player ID not available. Please refresh.", variant: "destructive"});
       return false;
     }
@@ -175,10 +176,9 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           toast({ title: "Game Not Found", description: `Game with ID ${gameIdToJoin} does not exist.`, variant: "destructive" });
           return false;
         }
-
         const currentGameData = gameSnap.data() as GameState;
         if (currentGameData.players.find(p => p.id === localPlayerId)) {
-          return true;
+          return true; 
         }
         if (currentGameData.players.length >= currentGameData.maxPlayers) {
           toast({ title: "Lobby Full", description: `This game lobby is full (${currentGameData.maxPlayers} players max).`, variant: "destructive" });
@@ -188,23 +188,20 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           toast({ title: "Game in Progress", description: "This game has already started or finished.", variant: "destructive" });
           return false;
         }
-
         const joiningPlayer: Player = {
           id: localPlayerId,
           name: username,
-          role: "ClueHolder", 
+          role: "ClueHolder" as Role,
           isHost: false,
           isAlive: true,
           clue: null,
           score: 0,
           isRevealedImposter: false,
         };
-        
         const updatedPlayerScoresBeforeRound = {
             ...(currentGameData.playerScoresBeforeRound || {}),
             [localPlayerId]: 0 
         };
-
         transaction.update(gameDocRef, {
           players: arrayUnion(joiningPlayer),
           actualPlayerCount: increment(1),
@@ -220,6 +217,25 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     }
   };
 
+  const updateGameSettings = async (settings: { gameMode: GameMode }) => {
+    if (!gameState || !localPlayerId || gameState.hostId !== localPlayerId) {
+      toast({ title: "Not Host", description: "Only the host can change game settings.", variant: "destructive" });
+      return;
+    }
+    const gameDocRef = doc(db, "games", gameState.gameId);
+    const numberOfItems = settings.gameMode === 'images' ? 4 : 9;
+    try {
+      await updateDoc(gameDocRef, { 
+        gameMode: settings.gameMode,
+        numberOfItems: numberOfItems,
+        gameLog: arrayUnion(`Game mode changed to ${settings.gameMode} (${numberOfItems} items).`)
+      });
+    } catch (error) {
+      console.error("Error updating game settings:", error);
+      toast({ title: "Settings Error", description: (error as Error).message, variant: "destructive"});
+    }
+  };
+
  const startGameAI = async () => {
     if (!gameState || !localPlayerId || gameState.hostId !== localPlayerId) {
       toast({ title: "Not Host", description: "Only the host can start the game.", variant: "destructive" });
@@ -232,10 +248,16 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
 
     setIsLoading(true);
     try {
-      toast({ title: "Generating words and clues...", description: "Please wait." });
-      const aiData = await generateWordsAndClues({ numberOfWords: 9 });
+      toast({ title: "Generating items and clues...", description: "Please wait." });
+      
+      let aiData: AIGameDataOutput;
+      if (gameState.gameMode === 'images') {
+        aiData = await generateImagesAndClues({ numberOfImages: gameState.numberOfItems });
+      } else { // 'words' mode
+        aiData = await generateWordsAndClues({ numberOfWords: gameState.numberOfItems });
+      }
 
-      if (!aiData || !aiData.words || aiData.words.length === 0 || !aiData.targetWord || !aiData.clueHolderClue) {
+      if (!aiData || !aiData.items || aiData.items.length === 0 || !aiData.targetItemDescription || !aiData.clueHolderClue) {
         throw new Error("Failed to generate complete game data. Please try starting again.");
       }
       
@@ -245,16 +267,23 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       }, {} as Record<string, number>);
 
       const shuffledPlayersForAssignment = shuffleArray([...gameState.players]);
-      const { updatedPlayers, gameWords } = assignRolesAndClues(shuffledPlayersForAssignment, aiData, gameState.minPlayers, gameState.maxPlayers);
+      const { updatedPlayers, gameItems } = assignRolesAndClues(
+        shuffledPlayersForAssignment, 
+        aiData, 
+        gameState.minPlayers, 
+        gameState.maxPlayers,
+        gameState.gameMode,
+        gameState.numberOfItems
+      );
 
       const gameDocRef = doc(db, "games", gameState.gameId);
       await updateDoc(gameDocRef, {
         status: 'role-reveal' as GameStatus,
-        words: gameWords, // Already shuffled in assignRolesAndClues
-        targetWord: aiData.targetWord,
+        items: gameItems,
+        targetWord: aiData.targetItemDescription, // targetWord in DB stores the description
         players: updatedPlayers,
         gameLog: arrayUnion(`Game started by ${gameState.players.find(p=>p.id === gameState.hostId)?.name}. Roles assigned!`),
-        chatMessages: [], // Clear chat for new game
+        chatMessages: [],
         eliminationCount: 0,
         lockedInWordGuess: null,
         winner: null,
@@ -302,19 +331,19 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     }
   };
 
-  const eliminateWord = async (wordText: string) => {
+  const eliminateItem = async (itemIdentifierText: string) => { // Renamed from eliminateWord
     if (!gameState || !localPlayerId) return;
     const player = gameState.players.find(p => p.id === localPlayerId);
     if (!player || player.role !== 'Communicator') {
-      toast({ title: "Invalid Action", description: "Only the Communicator can eliminate words.", variant: "destructive" });
+      toast({ title: "Invalid Action", description: "Only the Communicator can eliminate items.", variant: "destructive" });
       return;
     }
     if (gameState.status !== 'discussion' && gameState.status !== 'word-elimination') {
-        toast({ title: "Invalid Action", description: "Words can only be eliminated during discussion phase.", variant: "destructive" });
+        toast({ title: "Invalid Action", description: "Items can only be eliminated during discussion phase.", variant: "destructive" });
         return;
     }
     if (gameState.eliminationCount >= gameState.maxEliminations) {
-        toast({ title: "Max Eliminations Reached", description: `Maximum ${gameState.maxEliminations} words can be eliminated.`, variant: "default" });
+        toast({ title: "Max Eliminations Reached", description: `Maximum ${gameState.maxEliminations} items can be eliminated.`, variant: "default" });
         return;
     }
 
@@ -325,55 +354,56 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         if (!freshGameSnap.exists()) throw new Error("Game not found");
         const freshGameState = freshGameSnap.data() as GameState;
 
-        const wordToEnd = freshGameState.words.find(w => w.text === wordText);
-        if (!wordToEnd || wordToEnd.isEliminated) {
-            toast({ title: "Invalid Word", description: "Word not found or already eliminated.", variant: "destructive"});
-            throw new Error("Invalid word for elimination");
+        const itemToEnd = freshGameState.items.find(i => i.text === itemIdentifierText);
+        if (!itemToEnd || itemToEnd.isEliminated) {
+            toast({ title: "Invalid Item", description: "Item not found or already eliminated.", variant: "destructive"});
+            throw new Error("Invalid item for elimination");
         }
 
-        const updatedWords = freshGameState.words.map(w => w.text === wordText ? { ...w, isEliminated: true } : w);
+        const updatedItems = freshGameState.items.map(i => i.text === itemIdentifierText ? { ...i, isEliminated: true } : i);
         const newEliminationCount = (freshGameState.eliminationCount || 0) + 1;
         let newStatus: GameStatus = freshGameState.status;
         let gameWinner: GameState['winner'] = null;
         let reason = "";
         let finalPlayersState = freshGameState.players;
+        const itemTypeDisplay = freshGameState.gameMode === 'images' ? 'item' : 'word';
 
-        if (wordToEnd.isTarget) {
+        if (itemToEnd.isTarget) {
           gameWinner = 'Imposters';
-          reason = `The Communicator eliminated the secret word (${wordText})! Imposters win. Key:IMPOSTER_WIN_TARGET_ELIMINATED`;
+          reason = `The Communicator eliminated the secret ${itemTypeDisplay} ("${itemIdentifierText}")! Imposters win. Key:IMPOSTER_WIN_TARGET_ELIMINATED`;
           newStatus = 'finished';
-          finalPlayersState = calculateScores({...freshGameState, words: updatedWords, eliminationCount: newEliminationCount, winner: gameWinner, winningReason: reason, players: freshGameState.players, targetWord: freshGameState.targetWord });
+          finalPlayersState = calculateScores({...freshGameState, items: updatedItems, eliminationCount: newEliminationCount, winner: gameWinner, winningReason: reason, players: freshGameState.players, targetWord: freshGameState.targetWord });
         } else if (newEliminationCount >= freshGameState.maxEliminations) {
-           toast({title: "Max Eliminations Reached", description: `No more eliminations. Communicator must confirm a target word.`});
+           toast({title: "Max Eliminations Reached", description: `No more eliminations. Communicator must confirm a target ${itemTypeDisplay}.`});
         }
 
         transaction.update(gameDocRef, {
-          words: updatedWords,
+          items: updatedItems,
           eliminationCount: newEliminationCount,
           status: newStatus,
           winner: gameWinner,
           winningReason: reason,
-          gameLog: arrayUnion(`${player.name} (Communicator) eliminated "${wordText}". Eliminations: ${newEliminationCount}/${freshGameState.maxEliminations}. ${reason}`),
+          gameLog: arrayUnion(`${player.name} (Communicator) eliminated "${itemIdentifierText}". Eliminations: ${newEliminationCount}/${freshGameState.maxEliminations}. ${reason}`),
           players: finalPlayersState,
         });
       });
     } catch (error) {
-      console.error("Error eliminating word:", error);
-      if ((error as Error).message !== "Invalid word for elimination") {
+      console.error("Error eliminating item:", error);
+      if ((error as Error).message !== "Invalid item for elimination") {
         toast({ title: "Elimination Error", description: (error as Error).message, variant: "destructive"});
       }
     }
   };
 
-  const communicatorConfirmTarget = async (wordText: string) => {
+  const communicatorConfirmTargetItem = async (itemIdentifierText: string) => { // Renamed
     if (!gameState || !localPlayerId) return;
     const player = gameState.players.find(p => p.id === localPlayerId);
     if (!player || player.role !== 'Communicator') {
-      toast({ title: "Invalid Action", description: "Only the Communicator can confirm the target word.", variant: "destructive" });
+      toast({ title: "Invalid Action", description: "Only the Communicator can confirm the target item.", variant: "destructive" });
       return;
     }
     if (gameState.status !== 'discussion' && gameState.status !== 'word-elimination') {
-      toast({ title: "Invalid Phase", description: "Can only confirm a word during discussion/elimination phase.", variant: "destructive" });
+      toast({ title: "Invalid Phase", description: "Can only confirm an item during discussion/elimination phase.", variant: "destructive" });
       return;
     }
 
@@ -384,53 +414,53 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         if (!freshGameSnap.exists()) throw new Error("Game not found");
         const freshGameState = freshGameSnap.data() as GameState;
 
-        const guessedWord = freshGameState.words.find(w => w.text === wordText);
-        if (!guessedWord || guessedWord.isEliminated) {
-          toast({ title: "Invalid Confirmation", description: "Cannot confirm an eliminated or non-existent word.", variant: "destructive" });
-          throw new Error("Invalid word for confirmation");
+        const guessedItem = freshGameState.items.find(i => i.text === itemIdentifierText);
+        if (!guessedItem || guessedItem.isEliminated) {
+          toast({ title: "Invalid Confirmation", description: "Cannot confirm an eliminated or non-existent item.", variant: "destructive" });
+          throw new Error("Invalid item for confirmation");
         }
 
         let newStatus: GameStatus = freshGameState.status;
         let gameWinner: GameState['winner'] = null;
         let reason = "";
         let finalPlayersState = freshGameState.players;
-        const confirmedWordData = { wordText, playerId: localPlayerId, isCorrect: !!guessedWord?.isTarget };
+        const confirmedItemData = { wordText: itemIdentifierText, playerId: localPlayerId, isCorrect: !!guessedItem?.isTarget };
+        const itemTypeDisplay = freshGameState.gameMode === 'images' ? 'item' : 'word';
 
         const systemMessage: ChatMessage = {
             id: generateShortId(10),
             playerId: 'SYSTEM_GAME_EVENT',
             playerName: 'Game Event',
-            text: `${player.name} (Communicator) confirmed the word: "${wordText}".`,
+            text: `${player.name} (Communicator) confirmed the ${itemTypeDisplay}: "${itemIdentifierText}".`,
             timestamp: Date.now(),
         };
 
-        if (guessedWord.isTarget) {
+        if (guessedItem.isTarget) {
           newStatus = 'post-guess-reveal';
-          reason = `Team, led by Communicator ${player.name}, confirmed the correct word: "${wordText}"! Key:CORRECT_WORD_LOCKED`;
-          // Mark imposters as revealed (for themselves) - GameplayScreen UI handles actual visibility
+          reason = `Team, led by Communicator ${player.name}, confirmed the correct ${itemTypeDisplay}: "${itemIdentifierText}"! Key:CORRECT_WORD_LOCKED`;
           finalPlayersState = freshGameState.players.map(p =>
             p.role === 'Imposter' ? {...p, isRevealedImposter: true} : p
           );
         } else {
           gameWinner = 'Imposters';
-          reason = `Communicator ${player.name} confirmed the wrong word: "${wordText}". The secret word was "${freshGameState.targetWord}". Imposters win. Key:IMPOSTER_WIN_COMM_WRONG_CONFIRM`;
+          reason = `Communicator ${player.name} confirmed the wrong ${itemTypeDisplay}: "${itemIdentifierText}". The secret ${itemTypeDisplay} was "${freshGameState.targetWord}". Imposters win. Key:IMPOSTER_WIN_COMM_WRONG_CONFIRM`;
           newStatus = 'finished';
-          finalPlayersState = calculateScores({...freshGameState, winner: gameWinner, winningReason: reason, lockedInWordGuess: confirmedWordData, players: finalPlayersState, words: freshGameState.words, targetWord: freshGameState.targetWord });
+          finalPlayersState = calculateScores({...freshGameState, winner: gameWinner, winningReason: reason, lockedInWordGuess: confirmedItemData, players: finalPlayersState, items: freshGameState.items, targetWord: freshGameState.targetWord });
         }
 
         transaction.update(gameDocRef, {
           status: newStatus,
-          lockedInWordGuess: confirmedWordData, // Store the communicator's confirmation
+          lockedInWordGuess: confirmedItemData,
           winner: gameWinner,
           winningReason: reason,
-          gameLog: arrayUnion(`${player.name} (Communicator) confirmed "${wordText}". ${reason}`),
+          gameLog: arrayUnion(`${player.name} (Communicator) confirmed "${itemIdentifierText}". ${reason}`),
           players: finalPlayersState,
           chatMessages: arrayUnion(systemMessage),
         });
       });
     } catch (error) {
-      console.error("Error confirming target word:", error);
-      if ((error as Error).message !== "Invalid word for confirmation") {
+      console.error("Error confirming target item:", error);
+      if ((error as Error).message !== "Invalid item for confirmation") {
          toast({ title: "Confirmation Error", description: (error as Error).message, variant: "destructive"});
       }
     }
@@ -465,25 +495,25 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         let gameWinner: GameState['winner'] = 'Team';
         let reason = "";
         
-        const wrongEliminationsCount = freshGameState.words.filter(w => w.isEliminated && !w.isTarget).length;
+        const wrongEliminationsCount = freshGameState.items.filter(w => w.isEliminated && !w.isTarget).length;
+        const itemTypeDisplay = freshGameState.gameMode === 'images' ? 'item' : 'word';
 
 
         if (accusedPlayer.role === 'Helper') {
           gameWinner = 'Team'; 
-          reason = `Team guessed the word! Imposters (${accuser.name}) correctly exposed ${accusedPlayer.name} as the Helper. Key:HELPER_EXPOSED`;
+          reason = `Team guessed the ${itemTypeDisplay}! Imposters (${accuser.name}) correctly exposed ${accusedPlayer.name} as the Helper. Key:HELPER_EXPOSED`;
         } else {
           gameWinner = 'Team';
           const helperName = freshGameState.players.find(p => p.role === 'Helper')?.name || 'The Helper';
-           if (wrongEliminationsCount === 0 && freshGameState.eliminationCount < freshGameState.maxEliminations) { // Check if no wrong words were eliminated AND not all elims used
-            reason = `Team achieved a PERFECT GAME! They guessed the word, ${helperName} remained hidden, and no wrong words were eliminated. Key:PERFECT_GAME`;
+           if (wrongEliminationsCount === 0 && freshGameState.eliminationCount < freshGameState.maxEliminations) {
+            reason = `Team achieved a PERFECT GAME! They guessed the ${itemTypeDisplay}, ${helperName} remained hidden, and no wrong items were eliminated. Key:PERFECT_GAME`;
           } else {
-            reason = `Team guessed the word! Imposters (${accuser.name}) failed to expose the Helper. ${accusedPlayer.name} was not the Helper. ${helperName} remained hidden. Key:HELPER_HIDDEN`;
+            reason = `Team guessed the ${itemTypeDisplay}! Imposters (${accuser.name}) failed to expose the Helper. ${accusedPlayer.name} was not the Helper. ${helperName} remained hidden. Key:HELPER_HIDDEN`;
           }
         }
 
         freshGameState = {...freshGameState, winner: gameWinner, winningReason: reason, status: 'finished'};
         const finalPlayersState = calculateScores(freshGameState);
-
 
         transaction.update(gameDocRef, {
           status: 'finished' as GameStatus,
@@ -538,7 +568,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
 
             if (newActualPlayerCount < currentData.minPlayers && currentData.status !== 'lobby' && currentData.status !== 'finished') {
               let reason = `${playerToRemove.name} left. Not enough players to continue. Game ended.`;
-              const finalPlayers = calculateScores({...currentData, players: newPlayersArray, winner: 'NoOne', winningReason: reason, words: currentData.words, targetWord: currentData.targetWord });
+              const finalPlayers = calculateScores({...currentData, players: newPlayersArray, winner: 'NoOne', winningReason: reason, items: currentData.items, targetWord: currentData.targetWord });
               transaction.update(gameDocRef, {
                   players: finalPlayers,
                   actualPlayerCount: newActualPlayerCount,
@@ -600,17 +630,23 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
 
     setIsLoading(true);
     try {
-      toast({ title: "Generating words and clues...", description: "Please wait." });
-      const aiData = await generateWordsAndClues({ numberOfWords: 9 });
+      toast({ title: "Generating items and clues...", description: "Please wait." });
 
-      if (!aiData || !aiData.words || aiData.words.length === 0 || !aiData.targetWord || !aiData.clueHolderClue ) {
+      let aiData: AIGameDataOutput;
+      if (gameState.gameMode === 'images') {
+        aiData = await generateImagesAndClues({ numberOfImages: gameState.numberOfItems });
+      } else { // 'words' mode
+        aiData = await generateWordsAndClues({ numberOfWords: gameState.numberOfItems });
+      }
+
+      if (!aiData || !aiData.items || aiData.items.length === 0 || !aiData.targetItemDescription || !aiData.clueHolderClue ) {
         throw new Error("Failed to generate complete game data for the new round.");
       }
 
       const playersForNewRound = gameState.players.map(p => ({
         id: p.id,
         name: p.name,
-        score: p.score || 0, // Preserve score
+        score: p.score || 0,
         isHost: p.id === gameState.hostId,
         role: "ClueHolder" as Role, 
         clue: null,
@@ -618,29 +654,35 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         isRevealedImposter: false,
       }));
 
-      // Snapshot current total scores to be 'playerScoresBeforeRound' for the new round
       const scoresSnapshot = playersForNewRound.reduce((acc, p) => {
-        acc[p.id] = p.score; // p.score is already the total score from the previous round
+        acc[p.id] = p.score;
         return acc;
       }, {} as Record<string, number>);
 
       const shuffledPlayersForAssignment = shuffleArray([...playersForNewRound]);
-      const { updatedPlayers, gameWords } = assignRolesAndClues(shuffledPlayersForAssignment, aiData, gameState.minPlayers, gameState.maxPlayers);
+      const { updatedPlayers, gameItems } = assignRolesAndClues(
+        shuffledPlayersForAssignment, 
+        aiData, 
+        gameState.minPlayers, 
+        gameState.maxPlayers,
+        gameState.gameMode,
+        gameState.numberOfItems
+      );
 
       const gameDocRef = doc(db, "games", gameState.gameId);
       await updateDoc(gameDocRef, {
         status: 'role-reveal' as GameStatus,
-        words: gameWords, // Already shuffled in assignRolesAndClues
-        targetWord: aiData.targetWord,
-        players: updatedPlayers, // Scores are preserved, roles/clues are new
+        items: gameItems,
+        targetWord: aiData.targetItemDescription,
+        players: updatedPlayers, 
         eliminationCount: 0,
         lockedInWordGuess: null,
         winner: null,
         winningReason: "",
-        chatMessages: [], // Clear chat
+        chatMessages: [], 
         gameLog: arrayUnion(`Host ${gameState.players.find(p => p.id === gameState.hostId)?.name || 'Host'} started a new round.`),
         actualPlayerCount: gameState.players.length,
-        playerScoresBeforeRound: scoresSnapshot, // Save scores from *before* this new round
+        playerScoresBeforeRound: scoresSnapshot,
       });
     } catch (error) {
       console.error("Failed to start new round:", error);
@@ -661,13 +703,14 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     startGameAI,
     sendChatMessage,
     leaveGame,
-    eliminateWord,
-    communicatorConfirmTarget,
+    eliminateItem, // Renamed
+    communicatorConfirmTargetItem, // Renamed
     imposterAccuseHelperInTwist,
     acknowledgeRole,
     updatePlayerInContext,
     startNewRound,
-  }), [gameState, localPlayerId, isLoading, isInitialized, toast, setLocalPlayerIdState]); // Callback functions added to dependencies
+    updateGameSettings, // Added
+  }), [gameState, localPlayerId, isLoading, isInitialized, toast]); 
 
   return (
     <GameContext.Provider value={contextValue}>
@@ -683,5 +726,3 @@ export const useGame = () => {
   }
   return context;
 };
-
-    

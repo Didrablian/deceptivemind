@@ -27,22 +27,16 @@ export default function GamePage() {
   useEffect(() => {
     if (isClient && gameState) {
       if (gameState.status === "lobby" && gameId) {
-        // If we land on game page but game is in lobby, redirect to lobby
-        // This can happen if URL is manually changed or due to race conditions
         router.push(`/lobby/${gameId}`);
         return;
       }
-      // Ensure player is still part of the game
       if (!localPlayerId || !gameState.players.find(p => p.id === localPlayerId)) {
-        // Player might have been removed or game ended and they are no longer part of it.
-        // Redirect to home if not already there or in a lobby.
         if (gameId && !router.pathname?.startsWith('/lobby/') && router.pathname !== '/') {
           toast({ title: "Session Ended", description: "You are no longer in this game.", variant: "default"});
           router.push('/');
         }
       }
     } else if (isClient && !isGameContextLoading && !gameState && gameId) {
-      // Game doesn't exist or user isn't part of it, or it ended and was deleted
        if (!router.pathname?.startsWith('/lobby/') && router.pathname !== '/') {
         toast({ title: "Game Not Found", description: "The game session may have ended or does not exist.", variant: "destructive"});
         router.push('/');
@@ -73,7 +67,12 @@ export default function GamePage() {
 
   switch (gameState.status) {
     case 'role-reveal':
-      return <RoleRevealScreen player={localPlayer} targetWord={gameState.targetWord} onContinue={acknowledgeRole} />;
+      return <RoleRevealScreen 
+                player={localPlayer} 
+                targetItemDescription={gameState.targetWord} // targetWord now holds the description
+                gameMode={gameState.gameMode} // Pass gameMode
+                onContinue={acknowledgeRole} 
+              />;
     case 'discussion':
     case 'word-elimination':
     case 'word-lock-in-attempt': 
@@ -86,8 +85,8 @@ export default function GamePage() {
                 gameId={gameState.gameId}
                 isHost={localPlayer.id === gameState.hostId}
              />;
-    case 'lobby': // Should be handled by useEffect redirect, but as a fallback
-        router.push(`/lobby/${gameId}`); // Redirect to lobby if somehow still here
+    case 'lobby': 
+        router.push(`/lobby/${gameId}`); 
         return (  <div className="flex flex-col items-center justify-center flex-grow">
                     <Loader2 className="h-16 w-16 animate-spin text-primary mb-4" />
                     <p className="text-xl text-muted-foreground">Redirecting to lobby...</p>

@@ -14,10 +14,11 @@ export interface Player {
   isRevealedImposter?: boolean;
 }
 
-export interface GameWord {
-  text: string;
+export interface GameItem { // Renamed from GameWord
+  text: string; // For words, this is the word. For images, this is the description.
   isTarget: boolean;
   isEliminated?: boolean;
+  imageUrl?: string; // Optional URL for the image if in image mode
 }
 
 export interface ChatMessage {
@@ -25,30 +26,32 @@ export interface ChatMessage {
   playerId: string;
   playerName:string;
   text: string;
-  timestamp: number; // Numeric timestamp (Date.now())
+  timestamp: number;
 }
 
 export type GameStatus =
   | "lobby"
   | "role-reveal"
   | "discussion"
-  | "word-elimination"
-  | "word-lock-in-attempt"
+  | "word-elimination" // This status might be merged with 'discussion' or re-evaluated
+  | "word-lock-in-attempt" // This status might be merged or re-evaluated
   | "post-guess-reveal"
   | "finished";
+
+export type GameMode = 'words' | 'images';
 
 export interface GameState {
   gameId: string;
   players: Player[];
   status: GameStatus;
-  words: GameWord[];
-  targetWord: string;
+  items: GameItem[]; // Renamed from words
+  targetWord: string; // Represents the target item's text/description
   hostId: string;
   
   eliminationCount: number;
   maxEliminations: number;
 
-  lockedInWordGuess?: { wordText: string, playerId: string, isCorrect: boolean } | null;
+  lockedInWordGuess?: { wordText: string, playerId: string, isCorrect: boolean } | null; // wordText here will refer to item's text
 
   winner: "Imposters" | "Team" | "GoodTeam" | "NoOne" | null;
   winningReason?: string;
@@ -60,12 +63,15 @@ export interface GameState {
   maxPlayers: number;
   actualPlayerCount?: number;
 
-  playerScoresBeforeRound?: Record<string, number>; // Stores scores at the start of the current round
+  playerScoresBeforeRound?: Record<string, number>;
+
+  gameMode: GameMode; // New: 'words' or 'images'
+  numberOfItems: number; // New: 9 for words, 4 for images
 }
 
-export interface AIWordsAndClues {
-  targetWord: string;
-  words: string[];
-  helperClue: string;
+// Unified AI output type
+export interface AIGameDataOutput {
+  targetItemDescription: string; // Description of the target (word or image)
+  items: Array<{ text: string; imageUrl?: string }>; // Array of words or image objects
   clueHolderClue: string;
 }

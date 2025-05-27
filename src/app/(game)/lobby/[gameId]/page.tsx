@@ -8,23 +8,24 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
+import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Users, Play, Copy, LogOut } from 'lucide-react';
+import { Loader2, Users, Play, Copy, LogOut, Settings, Image as ImageIcon, FileText } from 'lucide-react';
+import type { GameMode } from '@/lib/types';
 
 export default function LobbyPage() {
   const router = useRouter();
   const params = useParams();
   const gameId = Array.isArray(params.gameId) ? params.gameId[0] : params.gameId;
-  const { gameState, localPlayerId, isLoading, startGameAI, leaveGame } = useGame();
+  const { gameState, localPlayerId, isLoading, startGameAI, leaveGame, updateGameSettings } = useGame();
   const { toast } = useToast();
   const [isStartingGame, setIsStartingGame] = useState(false);
 
   useEffect(() => {
     if (gameState && gameState.status !== "lobby" && gameState.status !== "finished") {
-      // If game is in progress (not lobby or finished), redirect to the game page.
       router.push(`/game/${gameState.gameId}`);
     }
-    // This effect will re-run if gameState or router changes.
   }, [gameState, router]);
 
   const handleStartGame = async () => {
@@ -38,7 +39,6 @@ export default function LobbyPage() {
     }
     setIsStartingGame(true);
     await startGameAI();
-    // No need to setIsStartingGame(false) here as the page will redirect or re-render due to gameState change
   };
 
   const copyGameId = () => {
@@ -54,7 +54,12 @@ export default function LobbyPage() {
     toast({ title: "Left Lobby" });
   };
 
-  if (isLoading || (!gameState && gameId)) { // Show loading if context is loading OR gameState is null but we have a gameId (implies trying to load it)
+  const handleGameModeChange = async (newMode: GameMode) => {
+    if (!gameState || !localPlayerId || gameState.hostId !== localPlayerId) return;
+    await updateGameSettings({ gameMode: newMode });
+  };
+
+  if (isLoading || (!gameState && gameId)) { 
     return (
       <div className="flex flex-col items-center justify-center flex-grow">
         <Loader2 className="h-16 w-16 animate-spin text-primary mb-4" />
@@ -63,7 +68,7 @@ export default function LobbyPage() {
     );
   }
 
-  if (!gameState) { // If still no gameState after loading (and we have a gameId, which means it failed to load)
+  if (!gameState) { 
     return (
       <div className="flex flex-col items-center justify-center flex-grow">
         <p className="text-xl text-destructive">Lobby not found or error loading game.</p>
@@ -72,20 +77,15 @@ export default function LobbyPage() {
     );
   }
 
-  // The useEffect above handles redirection if the game status is not 'lobby' or 'finished'.
-  // If we reach here, and the status is still not 'lobby' or 'finished',
-  // it means the redirection from useEffect is about to happen or gameState is stale.
-  // We primarily rely on the useEffect for navigation to avoid calling router.push during render.
-
+  const isHost = localPlayerId === gameState.hostId;
   const canStart = gameState.players.length >= gameState.minPlayers &&
                    gameState.players.length <= gameState.maxPlayers &&
-                   localPlayerId === gameState.hostId &&
-                   gameState.status === 'lobby'; // Ensure game can only be started from lobby state
+                   isHost &&
+                   gameState.status === 'lobby';
 
   const playersNeededText = gameState.players.length < gameState.minPlayers
     ? `Waiting for ${gameState.minPlayers - gameState.players.length} more players to reach minimum of ${gameState.minPlayers}...`
     : `Ready with ${gameState.players.length} players. (Min: ${gameState.minPlayers}, Max: ${gameState.maxPlayers})`;
-
 
   return (
     <Card className="w-full flex-grow flex flex-col shadow-xl">
@@ -101,6 +101,34 @@ export default function LobbyPage() {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex-grow flex flex-col space-y-6">
+        {isHost && (
+          <div className="space-y-3 p-4 border rounded-md bg-secondary/20">
+            <h3 className="text-lg font-semibold flex items-center"><Settings className="mr-2 h-5 w-5 text-primary" /> Game Settings (Host)</h3>
+            <div>
+              <Label className="text-md font-medium">Game Mode</Label>
+              <RadioGroup
+                defaultValue={gameState.gameMode}
+                onValueChange={(value: string) => handleGameModeChange(value as GameMode)}
+                className="mt-2 flex gap-4"
+              >
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="words" id="mode-words" />
+                  <Label htmlFor="mode-words" className="flex items-center gap-1"><FileText className="w-4 h-4"/> Words ({gameState.gameMode === 'words' ? gameState.numberOfItems : 9})</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="images" id="mode-images" />
+                  <Label htmlFor="mode-images" className="flex items-center gap-1"><ImageIcon className="w-4 h-4"/> Images ({gameState.gameMode === 'images' ? gameState.numberOfItems : 4})</Label>
+                </div>
+              </RadioGroup>
+            </div>
+          </div>
+        )}
+        {!isHost && (
+            <div className="p-3 border rounded-md bg-secondary/20">
+                <p className="text-sm text-muted-foreground">Current Mode: <Badge variant="outline">{gameState.gameMode === 'words' ? 'Words' : 'Images'} ({gameState.numberOfItems} items)</Badge></p>
+            </div>
+        )}
+
         <div className="flex items-center justify-between">
           <h3 className="text-xl font-semibold flex items-center"><Users className="mr-2 h-6 w-6 text-primary" />Players ({gameState.players.length}/{gameState.maxPlayers})</h3>
           {gameState.players.length < gameState.minPlayers && (
@@ -113,7 +141,7 @@ export default function LobbyPage() {
              <p className={`text-sm ${gameState.players.length > gameState.maxPlayers ? 'text-destructive' : 'text-green-600'}`}>{playersNeededText}</p>
            )}
         </div>
-        <ScrollArea className="h-64 border rounded-md p-4 bg-background/50">
+        <ScrollArea className="h-48 sm:h-64 border rounded-md p-4 bg-background/50">
           {gameState.players.length > 0 ? (
             <ul className="space-y-3">
               {gameState.players.map((player) => (
