@@ -39,6 +39,7 @@ export default function LobbyPage() {
     }
     setIsStartingGame(true);
     await startGameAI();
+    // No longer setting isStartingGame to false here, as startGameAI will trigger a state change and navigation
   };
 
   const copyGameId = () => {
@@ -125,7 +126,7 @@ export default function LobbyPage() {
         )}
         {!isHost && (
             <div className="p-3 border rounded-md bg-secondary/20">
-                <p className="text-sm text-muted-foreground">Current Mode: <Badge variant="outline">{gameState.gameMode === 'words' ? 'Words' : 'Images'} ({gameState.numberOfItems} items)</Badge></p>
+                <div className="text-sm text-muted-foreground">Current Mode: <Badge variant="outline">{gameState.gameMode === 'words' ? 'Words' : 'Images'} ({gameState.numberOfItems} items)</Badge></div>
             </div>
         )}
 
@@ -138,7 +139,7 @@ export default function LobbyPage() {
             </div>
           )}
            {gameState.players.length >= gameState.minPlayers && (
-             <p className={`text-sm ${gameState.players.length > gameState.maxPlayers ? 'text-destructive' : 'text-green-600'}`}>{playersNeededText}</p>
+             <div className={`text-sm ${gameState.players.length > gameState.maxPlayers ? 'text-destructive' : 'text-green-600'}`}>{playersNeededText}</div>
            )}
         </div>
         <ScrollArea className="h-48 sm:h-64 border rounded-md p-4 bg-background/50">
