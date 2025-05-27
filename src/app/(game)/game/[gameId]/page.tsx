@@ -27,10 +27,15 @@ export default function GamePage() {
   useEffect(() => {
     if (isClient && gameState) {
       if (gameState.status === "lobby" && gameId) {
-        router.push(`/lobby/${gameId}`);
+        // This useEffect handles the redirect to lobby if status is 'lobby'
+        // No need to call router.push directly in the switch statement below
+        if (router.pathname !== `/lobby/${gameId}`) {
+            router.push(`/lobby/${gameId}`);
+        }
         return;
       }
       if (!localPlayerId || !gameState.players.find(p => p.id === localPlayerId)) {
+        // Check if already on home or lobby to prevent redirect loops during initial load
         if (gameId && !router.pathname?.startsWith('/lobby/') && router.pathname !== '/') {
           toast({ title: "Session Ended", description: "You are no longer in this game.", variant: "default"});
           router.push('/');
@@ -57,6 +62,7 @@ export default function GamePage() {
 
   const localPlayer = gameState.players.find(p => p.id === localPlayerId);
   if (!localPlayer) { 
+    // This should ideally be caught by the useEffect above, but as a fallback:
     return (
         <div className="flex flex-col items-center justify-center flex-grow">
             <p className="text-destructive text-lg">Error: Your player data could not be found in this game.</p>
@@ -86,11 +92,14 @@ export default function GamePage() {
                 isHost={localPlayer.id === gameState.hostId}
              />;
     case 'lobby': 
-        router.push(`/lobby/${gameId}`); 
-        return (  <div className="flex flex-col items-center justify-center flex-grow">
-                    <Loader2 className="h-16 w-16 animate-spin text-primary mb-4" />
-                    <p className="text-xl text-muted-foreground">Redirecting to lobby...</p>
-                </div>);
+        // The useEffect above now handles this redirection.
+        // We show a loading state while redirecting.
+        return (
+            <div className="flex flex-col items-center justify-center flex-grow">
+                <Loader2 className="h-16 w-16 animate-spin text-primary mb-4" />
+                <p className="text-xl text-muted-foreground">Redirecting to lobby...</p>
+            </div>
+        );
     default:
       return (
         <div className="flex flex-col items-center justify-center flex-grow">
