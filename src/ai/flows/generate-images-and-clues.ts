@@ -318,11 +318,11 @@ const generateImagesAndCluesFlow = ai.defineFlow(
             try {
                 console.log(`🎨 [IMAGE-GEN] Attempt ${retryCount + 1}/${maxRetries + 1} - Generating image for: "${itemText}"`);
                 console.log(`🎨 [IMAGE-GEN] Using model: dall-e-2, size: 512x512`);
-                console.log(`🎨 [IMAGE-GEN] Enhanced prompt: "A simple, clear image of ${itemText}"`);
+                console.log(`🎨 [IMAGE-GEN] Enhanced Dixit-style prompt for: "${itemText}"`);
                 
                 const imageResponse = await openai.images.generate({
                     model: "dall-e-2", // Using DALL-E 2 for faster generation
-                    prompt: `A simple, clear image of ${itemText}`, // Enhanced prompt for better results
+                    prompt: `A dreamy, surreal, whimsical illustration of ${itemText} in the style of Dixit board game artwork. Fantastical, fairy-tale like, with rich colors, ethereal lighting, and magical atmosphere. Imaginative and poetic interpretation with mysterious, storybook quality.`, // Dixit-inspired prompt
                     n: 1,
                     size: "512x512", // DALL-E 2 supports 256x256, 512x512, 1024x1024
                     response_format: "url", // Get direct URLs instead of base64
@@ -430,7 +430,7 @@ const generateImagesAndCluesFlow = ai.defineFlow(
                             
                             const imageResponse = await openai.images.generate({
                                 model: "dall-e-2",
-                                prompt: `A simple, clear image of ${alternativeDesc}`,
+                                prompt: `A dreamy, surreal, whimsical illustration of ${alternativeDesc} in the style of Dixit board game artwork. Fantastical, fairy-tale like, with rich colors, ethereal lighting, and magical atmosphere. Imaginative and poetic interpretation with mysterious, storybook quality.`,
                                 n: 1,
                                 size: "512x512",
                                 response_format: "url",
@@ -470,7 +470,7 @@ const generateImagesAndCluesFlow = ai.defineFlow(
                 try {
                     const imageResponse = await openai.images.generate({
                         model: "dall-e-2",
-                        prompt: `A simple image of ${simplifiedPrompt}`,
+                        prompt: `A dreamy, surreal, whimsical illustration of ${simplifiedPrompt} in Dixit board game style. Fantastical and magical atmosphere.`,
                         n: 1,
                         size: "512x512",
                         response_format: "url",

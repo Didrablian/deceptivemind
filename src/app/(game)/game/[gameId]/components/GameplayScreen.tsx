@@ -1,7 +1,7 @@
-
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { useGame } from '@/context/GameContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/componen
 import { Badge } from '@/components/ui/badge';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import type { Player, GameItem, GameState, Role } from '@/lib/types';
-import { Send, Users, ShieldAlert, HelpCircle, Eye, MessageSquare, Loader2, Trash2, CheckSquare, ZoomIn, CheckCircle2, Image as LucideImage } from 'lucide-react';
+import { Send, Users, ShieldAlert, HelpCircle, Eye, MessageSquare, Loader2, Trash2, CheckSquare, ZoomIn, CheckCircle2, Image as LucideImage, LogOut } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import NextImage from 'next/image'; // For Next.js optimized images
 
@@ -18,22 +18,18 @@ const ItemDisplay: React.FC<{
   item: GameItem,
   player: Player,
   isCommunicator: boolean,
-  onEliminate?: (itemIdentifierText: string) => void,
   onConfirmTarget?: (itemIdentifierText: string) => void,
   gameStatus: GameState['status'],
   gameMode: GameState['gameMode'],
-}> = ({ item, player, isCommunicator, onEliminate, onConfirmTarget, gameStatus, gameMode }) => {
+}> = ({ item, player, isCommunicator, onConfirmTarget, gameStatus, gameMode }) => {
   const knowsTarget = player.role === 'Helper' || player.role === 'Imposter';
   let highlightClass = knowsTarget && item.isTarget ? 'bg-accent/20 border-accent ring-2 ring-accent' : 'bg-card hover:bg-secondary/30';
-  if (item.isEliminated) {
-    highlightClass = 'bg-muted/50 text-muted-foreground line-through opacity-70';
-  }
 
-  const canEliminateOrConfirm = isCommunicator && !item.isEliminated && (gameStatus === 'discussion' || gameStatus === 'word-elimination');
+  const canConfirm = isCommunicator && (gameStatus === 'discussion' || gameStatus === 'identification');
 
   return (
     <div
-      className={`p-2 sm:p-3 rounded-lg shadow text-center font-medium text-base sm:text-lg transition-all relative ${highlightClass} ${ (canEliminateOrConfirm) ? 'cursor-pointer' : ''} flex flex-col items-center justify-center aspect-square`}
+      className={`p-2 sm:p-3 rounded-lg shadow text-center font-medium text-base sm:text-lg transition-all relative ${highlightClass} ${ canConfirm ? 'cursor-pointer' : ''} flex flex-col items-center justify-center aspect-square`}
     >
       {gameMode === 'images' && (item.imageUrl || gameMode === 'images') ? ( // Always render container if image mode
         <div className="relative w-full h-2/3 mb-1">
@@ -47,36 +43,14 @@ const ItemDisplay: React.FC<{
            />
         </div>
       ) : null}
-      <span className={`mt-1 text-xs sm:text-sm ${item.isEliminated ? 'line-through' : ''}`}>{item.text}</span>
+      {gameMode !== 'images' && <span className={`mt-1 text-xs sm:text-sm`}>{item.text}</span>}
 
-      {knowsTarget && item.isTarget && !item.isEliminated && <Badge variant="outline" className="absolute top-1 left-1 border-accent text-accent text-xs">TARGET</Badge>}
-      {item.isEliminated && <Badge variant="destructive" className="absolute top-1 right-1 text-xs">GONE</Badge>}
+      {knowsTarget && item.isTarget && <Badge variant="outline" className="absolute top-1 left-1 border-accent text-accent text-xs">TARGET</Badge>}
 
-      {canEliminateOrConfirm && isCommunicator && onEliminate && (
+      {canConfirm && isCommunicator && onConfirmTarget && (
          <AlertDialog>
           <AlertDialogTrigger asChild>
-            <Button variant="destructive" size="sm" className="absolute bottom-1 right-1 opacity-80 hover:opacity-100 p-1 sm:p-2" onClick={(e) => e.stopPropagation()}>
-              <Trash2 className="w-3 h-3 sm:w-4 sm:h-4"/>
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Eliminate "{item.text}"?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This action cannot be undone. Are you sure you want to eliminate this {gameMode === 'images' ? 'item' : 'word'}?
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel onClick={(e) => e.stopPropagation()}>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={(e) => {e.stopPropagation(); onEliminate(item.text);}} className="bg-destructive hover:bg-destructive/90">Confirm Elimination</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
-      {canEliminateOrConfirm && isCommunicator && onConfirmTarget && (
-         <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button variant="default" size="sm" className="absolute bottom-1 left-1 opacity-80 hover:opacity-100 bg-green-600 hover:bg-green-700 p-1 sm:p-2" onClick={(e) => e.stopPropagation()}>
+            <Button variant="default" size="sm" className="absolute bottom-1 center-1 opacity-80 hover:opacity-100 bg-green-600 hover:bg-green-700 p-1 sm:p-2" onClick={(e) => e.stopPropagation()}>
               <CheckCircle2 className="w-3 h-3 sm:w-4 sm:h-4"/>
             </Button>
           </AlertDialogTrigger>
@@ -182,8 +156,10 @@ const PlayerCard: React.FC<{
 
 
 export default function GameplayScreen() {
-  const { gameState, localPlayerId, sendChatMessage, eliminateItem, communicatorConfirmTargetItem, imposterAccuseHelperInTwist, isLoading } = useGame();
+  const router = useRouter();
+  const { gameState, localPlayerId, sendChatMessage, communicatorConfirmTargetItem, imposterAccuseHelperInTwist, leaveGame, isLoading } = useGame();
   const [chatInput, setChatInput] = useState('');
+  const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
   const { toast } = useToast();
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
@@ -192,6 +168,30 @@ export default function GameplayScreen() {
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
     }
   }, [gameState?.chatMessages]);
+
+  // Timer management
+  useEffect(() => {
+    if (!gameState || !gameState.phaseStartTime || !gameState.phaseDuration) {
+      setTimeRemaining(null);
+      return;
+    }
+
+    const updateTimer = () => {
+      const now = Date.now();
+      const elapsed = Math.floor((now - gameState.phaseStartTime!) / 1000);
+      const remaining = Math.max(0, gameState.phaseDuration! - elapsed);
+      setTimeRemaining(remaining);
+      
+      if (remaining === 0) {
+        setTimeRemaining(null);
+      }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+
+    return () => clearInterval(interval);
+  }, [gameState?.phaseStartTime, gameState?.phaseDuration]);
 
   if (isLoading || !gameState || !localPlayerId) {
     return <div className="flex justify-center items-center h-full"><Loader2 className="h-12 w-12 animate-spin text-primary m-auto" /></div>;
@@ -202,38 +202,35 @@ export default function GameplayScreen() {
     return <div className="text-center text-destructive p-4">Error: Local player data not found.</div>;
   }
 
+  const handleQuitGame = async () => {
+    await leaveGame();
+    router.push('/');
+  };
+
   const handleSendChat = async () => {
     if (!chatInput.trim()) return;
-    await sendChatMessage(chatInput.trim());
+    await sendChatMessage(chatInput);
     setChatInput('');
   };
 
-  const handleEliminateItem = async (itemIdentifierText: string) => {
-    if (localPlayer.role !== 'Communicator') {
-      toast({title: "Invalid Action", description: "Only the Communicator can eliminate items.", variant: "destructive"});
-      return;
-    }
-    if (gameState.status !== 'discussion' && gameState.status !== 'word-elimination') {
-       toast({title: "Invalid Phase", description: "Items can only be eliminated during discussion/elimination phase.", variant: "destructive"});
-      return;
-    }
-    await eliminateItem(itemIdentifierText);
-  };
-
   const handleCommunicatorConfirmTargetItem = async (itemIdentifierText: string) => {
-    if (localPlayer.role !== 'Communicator') {
-      toast({title: "Invalid Action", description: "Only the Communicator can confirm the target item.", variant: "destructive"});
-      return;
+    try {
+      await communicatorConfirmTargetItem(itemIdentifierText);
+      toast({ title: "Item Confirmed", description: `You confirmed "${itemIdentifierText}" as the target.`, variant: "default" });
+    } catch (error) {
+      console.error("Error confirming target item:", error);
+      toast({ title: "Error", description: "Could not confirm item.", variant: "destructive" });
     }
-    if (gameState.status !== 'discussion' && gameState.status !== 'word-elimination') {
-       toast({title: "Invalid Phase", description: "Target can only be confirmed during discussion/elimination phase.", variant: "destructive"});
-      return;
-    }
-    await communicatorConfirmTargetItem(itemIdentifierText);
   };
 
   const handleImposterAccuseHelper = async (accusedPlayerId: string) => {
-    await imposterAccuseHelperInTwist(accusedPlayerId);
+    try {
+      await imposterAccuseHelperInTwist(accusedPlayerId);
+      toast({ title: "Accusation Made", description: "Your accusation has been submitted.", variant: "default" });
+    } catch (error) {
+      console.error("Error making accusation:", error);
+      toast({ title: "Error", description: "Could not submit accusation.", variant: "destructive" });
+    }
   };
 
   const isCommunicator = localPlayer.role === 'Communicator';
@@ -245,6 +242,77 @@ export default function GameplayScreen() {
 
   return (
     <div className="flex flex-col lg:flex-row gap-4 h-full flex-grow p-1 sm:p-4 bg-background rounded-lg shadow-inner">
+      {/* Timer Display */}
+      {timeRemaining !== null && (
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50">
+          <Card className="bg-accent/10 border-accent">
+            <CardContent className="p-3 text-center">
+              <div className="text-sm font-medium text-accent-foreground">
+                {gameState.status === 'role-understanding' && 'Understanding Roles'}
+                {gameState.status === 'identification' && 'Identification Phase'}
+              </div>
+              <div className="text-2xl font-bold text-accent">
+                {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+      
+      {/* Phase-specific content for role-understanding */}
+      {gameState.status === 'role-understanding' && (
+        <div className="w-full mb-4">
+          <Card className="bg-blue-50 border-blue-200">
+            <CardContent className="p-6 text-center">
+              <h2 className="text-xl font-bold text-blue-900 mb-2">Understanding Your Role</h2>
+              <p className="text-blue-700 mb-4">
+                You are a <strong>{localPlayer.role}</strong>. Take 30 seconds to understand your role and prepare.
+              </p>
+              {localPlayer.clue && (
+                <div className="bg-blue-100 p-3 rounded-lg">
+                  <div className="text-sm text-blue-600">Your Clue:</div>
+                  <div className="font-semibold text-blue-900 text-lg">{localPlayer.clue}</div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+      
+      {/* Phase-specific content for identification */}
+      {gameState.status === 'identification' && (
+        <div className="w-full mb-4">
+          <Card className="bg-orange-50 border-orange-200">
+            <CardContent className="p-6 text-center">
+              <h2 className="text-xl font-bold text-orange-900 mb-2">Identification Phase</h2>
+              <p className="text-orange-700 mb-2">
+                3 minutes to identify the word and imposters!
+              </p>
+              {localPlayer.role === 'Helper' && (
+                <p className="text-orange-600 font-medium">
+                  <strong>Helper:</strong> You know the target word! Help the Communicator identify it without being obvious to Imposters.
+                </p>
+              )}
+              {localPlayer.role === 'ClueHolder' && (
+                <p className="text-orange-600 font-medium">
+                  <strong>Clue Holder:</strong> Use your clue to help identify the target word and spot any Imposters.
+                </p>
+              )}
+              {localPlayer.role === 'Communicator' && (
+                <p className="text-orange-600 font-medium">
+                  <strong>Communicator:</strong> Work with your team to identify the target word. You can confirm it when ready!
+                </p>
+              )}
+              {localPlayer.role === 'Imposter' && (
+                <p className="text-orange-600 font-medium">
+                  <strong>Imposter:</strong> Blend in! Try to figure out the target word without being discovered.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       <Card className="lg:w-1/3 flex flex-col">
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Users className="text-primary" /> Players</CardTitle>
@@ -263,18 +331,42 @@ export default function GameplayScreen() {
           ))}
         </CardContent>
         <CardFooter className="p-4 border-t">
-          <div className="text-sm text-muted-foreground space-y-1">
-            <div>Status: <Badge variant={gameState.status === 'finished' ? 'default' : 'secondary'}>{gameState.status.replace('-', ' ').toUpperCase()}</Badge></div>
-            <div>Eliminations: {gameState.eliminationCount}/{gameState.maxEliminations}</div>
-             {gameState.status === 'post-guess-reveal' && localPlayer.role === 'Imposter' && (
-              <div className="text-accent font-semibold mt-2">Your team guessed the {itemTypeDisplay}! Now, identify the Helper from the players list.</div>
-            )}
-            {gameState.status === 'post-guess-reveal' && localPlayer.role !== 'Imposter' && (
-              <div className="text-primary font-semibold mt-2">Your team guessed the {itemTypeDisplay}! Waiting for Imposters to identify the Helper...</div>
-            )}
-             {gameState.status === 'post-guess-reveal' && localPlayer.role === 'Helper' && (
-              <div className="text-green-600 font-semibold mt-2">Your team found the {itemTypeDisplay}! Stay hidden, the Imposters are trying to find you!</div>
-            )}
+          <div className="w-full space-y-3">
+            <div className="text-sm text-muted-foreground space-y-1">
+              <div>Status: <Badge variant={gameState.status === 'finished' ? 'default' : 'secondary'}>{gameState.status.replace('-', ' ').toUpperCase()}</Badge></div>
+              <div>Eliminations: {gameState.eliminationCount}/{gameState.maxEliminations}</div>
+               {gameState.status === 'post-guess-reveal' && localPlayer.role === 'Imposter' && (
+                <div className="text-accent font-semibold mt-2">Your team guessed the {itemTypeDisplay}! Now, identify the Helper from the players list.</div>
+              )}
+              {gameState.status === 'post-guess-reveal' && localPlayer.role !== 'Imposter' && (
+                <div className="text-primary font-semibold mt-2">Your team guessed the {itemTypeDisplay}! Waiting for Imposters to identify the Helper...</div>
+              )}
+               {gameState.status === 'post-guess-reveal' && localPlayer.role === 'Helper' && (
+                <div className="text-green-600 font-semibold mt-2">Your team found the {itemTypeDisplay}! Stay hidden, the Imposters are trying to find you!</div>
+              )}
+            </div>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline" size="sm" className="w-full text-destructive border-destructive hover:bg-destructive/10">
+                  <LogOut className="mr-2 h-4 w-4" />
+                  Quit Game
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Leave Game?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Are you sure you want to leave this game? You can rejoin later if the game is still active.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleQuitGame} className="bg-destructive hover:bg-destructive/90">
+                    Leave Game
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </CardFooter>
       </Card>
@@ -293,7 +385,6 @@ export default function GameplayScreen() {
               item={itemObj}
               player={localPlayer}
               isCommunicator={isCommunicator}
-              onEliminate={isCommunicator ? handleEliminateItem : undefined}
               onConfirmTarget={isCommunicator ? handleCommunicatorConfirmTargetItem : undefined}
               gameStatus={gameState.status}
               gameMode={gameState.gameMode}
@@ -307,9 +398,9 @@ export default function GameplayScreen() {
                 <div className="font-semibold text-primary italic">{localPlayer.clue}</div>
             </div>
           )}
-          {localPlayer.role === 'Communicator' && (gameState.status === 'discussion' || gameState.status === 'word-elimination') && (
+          {localPlayer.role === 'Communicator' && (gameState.status === 'discussion' || gameState.status === 'identification') && (
             <div className="text-xs text-center text-muted-foreground w-full">
-              As Communicator: <Trash2 className="inline h-3 w-3 text-destructive"/> to eliminate, <CheckCircle2 className="inline h-3 w-3 text-green-600"/> to confirm target.
+              As Communicator: <CheckCircle2 className="inline h-3 w-3 text-green-600"/> to confirm target {itemTypeDisplay}.
             </div>
           )}
         </CardFooter>

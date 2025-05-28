@@ -1,4 +1,3 @@
-
 import type { Timestamp } from 'firebase/firestore';
 
 export type Role = "Communicator" | "Helper" | "Imposter" | "ClueHolder";
@@ -32,6 +31,8 @@ export interface ChatMessage {
 export type GameStatus =
   | "lobby"
   | "role-reveal"
+  | "role-understanding" // 30 seconds after clicking "Understanding roles"
+  | "identification" // 3 minutes for helper/clueholder/communicator to identify
   | "discussion"
   | "word-elimination" // This status might be merged with 'discussion' or re-evaluated
   | "word-lock-in-attempt" // This status might be merged or re-evaluated
@@ -67,6 +68,11 @@ export interface GameState {
 
   gameMode: GameMode; // New: 'words' or 'images'
   numberOfItems: number; // New: 9 for words, 4 for images
+  
+  // Timer fields
+  phaseStartTime?: number; // Timestamp when current phase started
+  phaseDuration?: number; // Duration in seconds for current timed phase
+  timeRemaining?: number; // Remaining time in seconds (real-time updated)
 }
 
 // Unified AI output type

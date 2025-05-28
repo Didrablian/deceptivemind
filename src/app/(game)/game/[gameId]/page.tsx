@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useEffect, useState } from 'react';
@@ -79,6 +78,8 @@ export default function GamePage() {
                 gameMode={gameState.gameMode} // Pass gameMode
                 onContinue={acknowledgeRole} 
               />;
+    case 'role-understanding':
+    case 'identification':
     case 'discussion':
     case 'word-elimination':
     case 'word-lock-in-attempt': 

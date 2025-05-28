@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react';
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
-import { doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, increment, runTransaction, Timestamp, FieldValue, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, increment, runTransaction, Timestamp, FieldValue, deleteDoc, serverTimestamp, deleteField } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type { GameState, Player, GameItem, ChatMessage, Role, GameStatus, GameMode, AIGameDataOutput } from '@/lib/types';
 import { initialGameState, generateShortId, assignRolesAndClues, calculateScores, shuffleArray } from '@/lib/gameUtils';
@@ -22,7 +22,6 @@ interface GameContextProps {
   startGameAI: () => Promise<void>;
   sendChatMessage: (text: string) => Promise<void>;
   leaveGame: () => Promise<void>;
-  eliminateItem: (itemIdentifierText: string) => Promise<void>;
   communicatorConfirmTargetItem: (itemIdentifierText: string) => Promise<void>;
   imposterAccuseHelperInTwist: (accusedPlayerId: string) => Promise<void>;
   acknowledgeRole: () => Promise<void>;
@@ -111,6 +110,10 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           playerScoresBeforeRound: data.playerScoresBeforeRound || {},
           gameMode: data.gameMode || 'words',
           numberOfItems: data.numberOfItems || (data.gameMode === 'images' ? 4 : 9),
+          // Timer fields
+          phaseStartTime: data.phaseStartTime || undefined,
+          phaseDuration: data.phaseDuration || undefined,
+          timeRemaining: data.timeRemaining || undefined,
         };
         setGameState(processedData);
       } else {
@@ -334,7 +337,45 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     if (!gameState || !localPlayerId) return;
     const gameDocRef = doc(db, "games", gameState.gameId);
     try {
-      await updateDoc(gameDocRef, { status: 'discussion' as GameStatus });
+      const now = Date.now();
+      await updateDoc(gameDocRef, { 
+        status: 'role-understanding' as GameStatus,
+        phaseStartTime: now,
+        phaseDuration: 30,
+        timeRemaining: 30
+      });
+      
+      // Auto-advance to identification phase after 30 seconds
+      setTimeout(async () => {
+        try {
+          await updateDoc(gameDocRef, {
+            status: 'identification' as GameStatus,
+            phaseStartTime: Date.now(),
+            phaseDuration: 180, // 3 minutes
+            timeRemaining: 180,
+            gameLog: arrayUnion("Identification phase begins - 3 minutes to identify the word/imposter!")
+          });
+          
+          // Auto-advance to discussion after 3 minutes
+          setTimeout(async () => {
+            try {
+              await updateDoc(gameDocRef, {
+                status: 'discussion' as GameStatus,
+                currentAccusation: null,
+                phaseStartTime: deleteField(),
+                timeRemaining: deleteField(),
+                gameLog: arrayUnion(`Discussion phase started. Communicator has chosen their target.`),
+              });
+            } catch (error) {
+              console.error("Error auto-advancing to discussion:", error);
+            }
+          }, 180000); // 3 minutes = 180,000ms
+          
+        } catch (error) {
+          console.error("Error auto-advancing to identification:", error);
+        }
+      }, 30000); // 30 seconds = 30,000ms
+      
     } catch (error) {
       console.error("Error acknowledging role:", error);
       toast({ title: "Error", description: "Could not update game status.", variant: "destructive"});
@@ -362,71 +403,6 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     }
   };
 
-  const eliminateItem = async (itemIdentifierText: string) => {
-    if (!gameState || !localPlayerId) return;
-    const player = gameState.players.find(p => p.id === localPlayerId);
-    if (!player || player.role !== 'Communicator') {
-      toast({ title: "Invalid Action", description: "Only the Communicator can eliminate items.", variant: "destructive" });
-      return;
-    }
-    if (gameState.status !== 'discussion' && gameState.status !== 'word-elimination') { // Keep word-elimination for now or merge logic
-        toast({ title: "Invalid Action", description: "Items can only be eliminated during discussion phase.", variant: "destructive" });
-        return;
-    }
-    if (gameState.eliminationCount >= gameState.maxEliminations) {
-        toast({ title: "Max Eliminations Reached", description: `Maximum ${gameState.maxEliminations} items can be eliminated.`, variant: "default" });
-        return;
-    }
-
-    const gameDocRef = doc(db, "games", gameState.gameId);
-    try {
-      await runTransaction(db, async (transaction) => {
-        const freshGameSnap = await transaction.get(gameDocRef);
-        if (!freshGameSnap.exists()) throw new Error("Game not found");
-        const freshGameState = freshGameSnap.data() as GameState;
-
-        const itemToEnd = freshGameState.items.find(i => i.text === itemIdentifierText);
-        if (!itemToEnd || itemToEnd.isEliminated) {
-            toast({ title: "Invalid Item", description: "Item not found or already eliminated.", variant: "destructive"});
-            throw new Error("Invalid item for elimination");
-        }
-
-        const updatedItems = freshGameState.items.map(i => i.text === itemIdentifierText ? { ...i, isEliminated: true } : i);
-        const newEliminationCount = (freshGameState.eliminationCount || 0) + 1;
-        let newStatus: GameStatus = freshGameState.status;
-        let gameWinner: GameState['winner'] = null;
-        let reason = "";
-        let finalPlayersState = freshGameState.players;
-        const itemTypeDisplay = freshGameState.gameMode === 'images' ? 'item' : 'word';
-
-        if (itemToEnd.isTarget) {
-          gameWinner = 'Imposters';
-          reason = `The Communicator eliminated the secret ${itemTypeDisplay} ("${itemIdentifierText}")! Imposters win. Key:IMPOSTER_WIN_TARGET_ELIMINATED`;
-          newStatus = 'finished';
-          finalPlayersState = calculateScores({...freshGameState, items: updatedItems, eliminationCount: newEliminationCount, winner: gameWinner, winningReason: reason, players: freshGameState.players, targetWord: freshGameState.targetWord });
-        } else if (newEliminationCount >= freshGameState.maxEliminations) {
-           toast({title: "Max Eliminations Reached", description: `No more eliminations. Communicator must confirm a target ${itemTypeDisplay}.`});
-           // No status change here, communicator still needs to confirm.
-        }
-
-        transaction.update(gameDocRef, {
-          items: updatedItems,
-          eliminationCount: newEliminationCount,
-          status: newStatus,
-          winner: gameWinner,
-          winningReason: reason,
-          gameLog: arrayUnion(`${player.name} (Communicator) eliminated "${itemIdentifierText}". Eliminations: ${newEliminationCount}/${freshGameState.maxEliminations}. ${reason}`),
-          players: finalPlayersState,
-        });
-      });
-    } catch (error) {
-      console.error("Error eliminating item:", error);
-      if ((error as Error).message !== "Invalid item for elimination") { // Avoid duplicate toasts
-        toast({ title: "Elimination Error", description: (error as Error).message, variant: "destructive"});
-      }
-    }
-  };
-
   const communicatorConfirmTargetItem = async (itemIdentifierText: string) => {
     if (!gameState || !localPlayerId) return;
     const player = gameState.players.find(p => p.id === localPlayerId);
@@ -434,8 +410,8 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       toast({ title: "Invalid Action", description: "Only the Communicator can confirm the target item.", variant: "destructive" });
       return;
     }
-    if (gameState.status !== 'discussion' && gameState.status !== 'word-elimination') {
-      toast({ title: "Invalid Phase", description: "Can only confirm an item during discussion/elimination phase.", variant: "destructive" });
+    if (gameState.status !== 'discussion' && gameState.status !== 'identification') {
+      toast({ title: "Invalid Phase", description: "Can only confirm an item during identification or discussion phase.", variant: "destructive" });
       return;
     }
 
@@ -447,8 +423,8 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         const freshGameState = freshGameSnap.data() as GameState;
 
         const guessedItem = freshGameState.items.find(i => i.text === itemIdentifierText);
-        if (!guessedItem || guessedItem.isEliminated) {
-          toast({ title: "Invalid Confirmation", description: "Cannot confirm an eliminated or non-existent item.", variant: "destructive" });
+        if (!guessedItem) {
+          toast({ title: "Invalid Confirmation", description: "Cannot confirm a non-existent item.", variant: "destructive" });
           throw new Error("Invalid item for confirmation");
         }
 
@@ -488,6 +464,10 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
           gameLog: arrayUnion(`${player.name} (Communicator) confirmed "${itemIdentifierText}". ${reason}`),
           players: finalPlayersState,
           chatMessages: arrayUnion(systemMessage),
+          // Clear timer when moving to new phase
+          phaseStartTime: deleteField(),
+          phaseDuration: deleteField(),
+          timeRemaining: deleteField(),
         });
       });
     } catch (error) {
@@ -521,7 +501,6 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
       return;
     }
 
-
     const gameDocRef = doc(db, "games", gameState.gameId);
     try {
       await runTransaction(db, async (transaction) => {
@@ -532,7 +511,6 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         let gameWinner: GameState['winner'] = 'Team'; // Default to team win if word was correct
         let reason = "";
         
-        const wrongEliminationsCount = freshGameState.items.filter(w => w.isEliminated && !w.isTarget).length;
         const itemTypeDisplay = freshGameState.gameMode === 'images' ? 'item' : 'word';
 
         if (accusedPlayer.role === 'Helper') {
@@ -541,11 +519,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         } else {
           gameWinner = 'Team';
           const helperName = freshGameState.players.find(p => p.role === 'Helper')?.name || 'The Helper';
-           if (wrongEliminationsCount === 0 && freshGameState.eliminationCount < freshGameState.maxEliminations) {
-            reason = `Team achieved a PERFECT GAME! They guessed the ${itemTypeDisplay}, ${helperName} remained hidden, and no wrong items were eliminated. Key:PERFECT_GAME`;
-          } else {
-            reason = `Team guessed the ${itemTypeDisplay}! Imposters (${accuser.name}) failed to expose the Helper. ${accusedPlayer.name} was not the Helper. ${helperName} remained hidden. Key:HELPER_HIDDEN`;
-          }
+          reason = `Team guessed the ${itemTypeDisplay}! Imposters (${accuser.name}) failed to expose the Helper. ${accusedPlayer.name} was not the Helper. ${helperName} remained hidden. Key:HELPER_HIDDEN`;
         }
 
         freshGameState = {...freshGameState, winner: gameWinner, winningReason: reason, status: 'finished'};
@@ -842,7 +816,6 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
     startGameAI,
     sendChatMessage,
     leaveGame,
-    eliminateItem,
     communicatorConfirmTargetItem,
     imposterAccuseHelperInTwist,
     acknowledgeRole,

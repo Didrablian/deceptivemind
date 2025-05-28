@@ -1,4 +1,3 @@
-
 import type { Player, Role, GameItem, GameState, GameStatus, AIGameDataOutput, GameMode } from './types';
 
 export function generateShortId(length: number = 6): string {
@@ -61,7 +60,7 @@ export function assignRolesAndClues(
     const role = shuffledRoles[index % shuffledRoles.length];
     let clue: string | null = null;
 
-    if (role === "ClueHolder") {
+    if (role === "ClueHolder" || role === "Helper") {
       clue = aiData.clueHolderClue; 
     } else {
       clue = null;
@@ -117,7 +116,7 @@ export function getRoleExplanation(role: Role, targetItemDescription?: string, c
     case "Communicator":
       return `Your Role: Communicator 🕵️‍♂️\nObjective: You are known to all. Lead the discussion. You will choose up to 3 items to eliminate from the grid. Crucially, you will also make the final decision on which item the team believes is the ${itemType}. If the ${itemType} is eliminated, or you confirm the wrong item, your team loses.`;
     case "Helper":
-      return `Your Role: Helper 💡\nObjective: You know the ${itemType}: "${targetText}". You do NOT have a specific clue to share. Subtly guide the team and the Communicator to the ${itemType}. If the team (via the Communicator) confirms the correct ${itemType}, Imposters will try to identify YOU. If they fail, your team wins big! If they succeed, the Imposters get points.`;
+      return `Your Role: Helper 💡\nObjective: You know the ${itemType}: "${targetText}". Your clue is: "${clue || 'CLUE_ERROR'}". Subtly guide the team and the Communicator to the ${itemType}. If the team (via the Communicator) confirms the correct ${itemType}, Imposters will try to identify YOU. If they fail, your team wins big! If they succeed, the Imposters get points.`;
     case "Imposter":
       return `Your Role: Imposter 👺\nObjective: You know the ${itemType}: "${targetText}". Blend in and mislead the team. Try to get them to eliminate the ${itemType} or have the Communicator confirm a wrong item. If the team *does* confirm the correct ${itemType}, you and any other Imposters will get a chance to identify the Helper to steal the win or gain points.`;
     case "ClueHolder":
