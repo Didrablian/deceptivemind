@@ -11,6 +11,7 @@ import { useToast } from '@/hooks/use-toast';
 import { GameProvider, useGame } from '@/context/GameContext';
 import { HiddenWordGameProvider, useHiddenWordGame } from '@/context/HiddenWordGameContext';
 import { BrainCircuit, Loader2, BookOpen, Search, Users, Coins, CreditCard, Plus } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 
 const GameCard = ({ 
   title, 
@@ -363,10 +364,10 @@ const CreditsWallet = () => {
   const [showPurchase, setShowPurchase] = useState(false);
 
   const creditPackages = [
-    { amount: 500, price: 4.99, bonus: 0, popular: false },
-    { amount: 1200, price: 9.99, bonus: 200, popular: true },
-    { amount: 2500, price: 19.99, bonus: 500, popular: false },
-    { amount: 5500, price: 39.99, bonus: 1500, popular: false },
+    { amount: 500, price: 1.49, bonus: 0, popular: false },
+    { amount: 1200, price: 2.99, bonus: 200, popular: true },
+    { amount: 2500, price: 5.99, bonus: 500, popular: false },
+    { amount: 5500, price: 11.99, bonus: 1500, popular: false },
   ];
 
   return (
@@ -410,19 +411,20 @@ const CreditsWallet = () => {
               >
                 {pkg.popular && (
                   <div className="absolute -top-2 left-1/2 transform -translate-x-1/2">
-                    <span className="bg-yellow-500 text-white text-xs px-2 py-1 rounded-full">Popular</span>
+                    <span className="bg-red-500 text-white text-xs px-2 py-1 rounded-full">Popular</span>
                   </div>
                 )}
                 <div className="text-center">
-                  <div className="font-bold text-yellow-800 dark:text-yellow-200">
-                    {(pkg.amount + pkg.bonus).toLocaleString()}
+                  <div className="text-lg font-bold text-yellow-800 mb-1">
+                    {pkg.amount.toLocaleString()}
                   </div>
-                  <div className="text-xs text-yellow-600 dark:text-yellow-400">
-                    {pkg.bonus > 0 && <span className="text-green-600">+{pkg.bonus} bonus</span>}
-                  </div>
-                  <div className="text-sm font-medium text-yellow-700 dark:text-yellow-300 mt-1">
-                    ${pkg.price}
-                  </div>
+                  {pkg.bonus > 0 && (
+                    <div className="text-xs text-green-600 font-medium mb-1">
+                      +{pkg.bonus} bonus
+                    </div>
+                  )}
+                  <div className="text-sm text-yellow-600 mb-2">Credits</div>
+                  <div className="text-lg font-semibold text-yellow-700">KWD {pkg.price}</div>
                 </div>
               </div>
             ))}
