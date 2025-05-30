@@ -519,7 +519,7 @@ export const GameProvider = ({ children, gameIdFromParams }: { children: ReactNo
         } else {
           gameWinner = 'Team';
           const helperName = freshGameState.players.find(p => p.role === 'Helper')?.name || 'The Helper';
-          reason = `Team guessed the ${itemTypeDisplay}! Imposters (${accuser.name}) failed to expose the Helper. ${accusedPlayer.name} was not the Helper. ${helperName} remained hidden. Key:HELPER_HIDDEN`;
+            reason = `Team guessed the ${itemTypeDisplay}! Imposters (${accuser.name}) failed to expose the Helper. ${accusedPlayer.name} was not the Helper. ${helperName} remained hidden. Key:HELPER_HIDDEN`;
         }
 
         freshGameState = {...freshGameState, winner: gameWinner, winningReason: reason, status: 'finished'};

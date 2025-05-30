@@ -10,8 +10,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from '@/hooks/use-toast';
 import { GameProvider, useGame } from '@/context/GameContext';
 import { HiddenWordGameProvider, useHiddenWordGame } from '@/context/HiddenWordGameContext';
-import { BrainCircuit, Loader2, BookOpen, Search, Users, Coins, CreditCard, Plus } from 'lucide-react';
+import { BrainCircuit, Loader2, BookOpen, Search, Users, Coins, CreditCard, Plus, Eye } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { WitnessGameProvider, useWitnessGame } from '@/context/WitnessGameContext';
 
 const GameCard = ({ 
   title, 
@@ -43,6 +44,7 @@ const GameCard = ({
       <div className={`text-sm ${textColor} opacity-80`}>
         {title === "Deceptive Mind" && "4-8 players • 15-30 min"}
         {title === "The Hidden Word" && "3-6 players • 10-20 min"}
+        {title === "Witness" && "4-10 players • 5-6 min"}
       </div>
       {!comingSoon && (
         <div className="mt-3 pt-3 border-t border-current/20">
@@ -68,7 +70,7 @@ function DeceptiveMindActions({ username, setUsername, isClient }: {
   const [gameIdToJoin, setGameIdToJoin] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
-
+  
   const validateInputs = (isCreatingGame: boolean): boolean => {
     if (!username.trim()) {
       toast({ title: "Username Required", description: "Please enter a username.", variant: "destructive" });
@@ -87,8 +89,8 @@ function DeceptiveMindActions({ username, setUsername, isClient }: {
       return false;
     }
     if (!localPlayerId && isClient) {
-      toast({ title: "Initializing...", description: "Please wait a moment.", variant: "default" });
-      return false;
+        toast({ title: "Initializing...", description: "Please wait a moment.", variant: "default" });
+        return false; 
     }
     return true;
   };
@@ -358,6 +360,157 @@ function HiddenWordActions({ username, setUsername, isClient }: {
   );
 }
 
+// Component for Witness game actions
+function WitnessActions({ username, setUsername, isClient }: {
+  username: string;
+  setUsername: (value: string) => void;
+  isClient: boolean;
+}) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const { createGame, joinGame, localPlayerId } = useWitnessGame();
+  const [gameIdToJoin, setGameIdToJoin] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
+
+  const validateInputs = (isCreatingGame: boolean): boolean => {
+    if (!username.trim()) {
+      toast({ title: "Username Required", description: "Please enter a username.", variant: "destructive" });
+      return false;
+    }
+    if (username.trim().length < 3 || username.trim().length > 15) {
+      toast({ title: "Invalid Username", description: "Username must be 3-15 characters.", variant: "destructive" });
+      return false;
+    }
+    if (!isCreatingGame && !gameIdToJoin.trim()) {
+      toast({ title: "Game ID Required", description: "Please enter a Game ID to join.", variant: "destructive" });
+      return false;
+    }
+    if (!isCreatingGame && gameIdToJoin.trim().length !== 6) {
+      toast({ title: "Invalid Game ID", description: "Game ID must be 6 characters long.", variant: "destructive" });
+      return false;
+    }
+    if (!localPlayerId && isClient) {
+      toast({ title: "Initializing...", description: "Please wait a moment.", variant: "default" });
+      return false;
+    }
+    return true;
+  };
+
+  const handleCreateGame = async () => {
+    if (!validateInputs(true) || isCreating) return;
+    setIsCreating(true);
+    
+    const newGameId = await createGame(username);
+    if (newGameId) {
+      router.push(`/witness-lobby/${newGameId}`);
+      toast({ title: "Game Created!", description: `Game ID: ${newGameId}. Share this with your friends!` });
+    }
+    setIsCreating(false);
+  };
+
+  const handleJoinGame = async () => {
+    if (!validateInputs(false) || isJoining) return;
+    setIsJoining(true);
+
+    const success = await joinGame(gameIdToJoin.toUpperCase(), username);
+    if (success) {
+      router.push(`/witness-lobby/${gameIdToJoin.toUpperCase()}`);
+      toast({ title: "Joining Game...", description: `Attempting to join game ID: ${gameIdToJoin.toUpperCase()}` });
+    }
+    setIsJoining(false);
+  };
+
+  return (
+    <Tabs defaultValue="create" className="w-full">
+      <TabsList className="grid w-full grid-cols-2">
+        <TabsTrigger value="create">Create Game</TabsTrigger>
+        <TabsTrigger value="join">Join Game</TabsTrigger>
+      </TabsList>
+      
+      <TabsContent value="create">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Eye className="text-purple-600"/> 
+              New Witness Session
+            </CardTitle>
+            <CardDescription>
+              Enter your username and start a new witness protection game.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="username-create">Username</Label>
+              <Input 
+                id="username-create" 
+                placeholder="Your Game Alias" 
+                value={username} 
+                onChange={(e) => setUsername(e.target.value)} 
+              />
+            </div>
+          </CardContent>
+          <CardFooter>
+            <Button 
+              onClick={handleCreateGame} 
+              className="w-full bg-purple-600 hover:bg-purple-700 text-white" 
+              disabled={isCreating || !localPlayerId}
+            >
+              {isCreating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {isCreating ? 'Creating...' : 'Create Game'}
+            </Button>
+          </CardFooter>
+        </Card>
+      </TabsContent>
+      
+      <TabsContent value="join">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Users className="text-purple-600"/> 
+              Join the Game
+            </CardTitle>
+            <CardDescription>
+              Enter your username and the Game ID to join an existing session.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="username-join">Username</Label>
+              <Input 
+                id="username-join" 
+                placeholder="Your Game Name" 
+                value={username} 
+                onChange={(e) => setUsername(e.target.value)} 
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="gameId">Game ID</Label>
+              <Input 
+                id="gameId" 
+                placeholder="6-Character Code" 
+                value={gameIdToJoin} 
+                onChange={(e) => setGameIdToJoin(e.target.value.toUpperCase())} 
+                maxLength={6} 
+              />
+            </div>
+          </CardContent>
+          <CardFooter>
+            <Button 
+              onClick={handleJoinGame} 
+              className="w-full bg-purple-600 hover:bg-purple-700 text-white" 
+              disabled={isJoining || !localPlayerId}
+            >
+              {isJoining ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {isJoining ? 'Joining...' : 'Join Game'}
+            </Button>
+          </CardFooter>
+        </Card>
+      </TabsContent>
+    </Tabs>
+  );
+}
+
 // Credits/Wallet Component
 const CreditsWallet = () => {
   const [credits, setCredits] = useState(1250); // Mock credits balance
@@ -442,7 +595,7 @@ const CreditsWallet = () => {
 function GamePlatformContent() {
   const [username, setUsername] = useState('');
   const [isClient, setIsClient] = useState(false);
-  const [selectedGameType, setSelectedGameType] = useState<'deceptive-mind' | 'hidden-word' | null>(null);
+  const [selectedGameType, setSelectedGameType] = useState<'deceptive-mind' | 'hidden-word' | 'witness' | null>(null);
   const [showGameActions, setShowGameActions] = useState(false);
 
   useEffect(() => {
@@ -460,7 +613,7 @@ function GamePlatformContent() {
     }
   };
 
-  const handleGameSelect = (gameType: 'deceptive-mind' | 'hidden-word') => {
+  const handleGameSelect = (gameType: 'deceptive-mind' | 'hidden-word' | 'witness') => {
     setSelectedGameType(gameType);
     setShowGameActions(true);
   };
@@ -481,7 +634,7 @@ function GamePlatformContent() {
           <p className="text-lg text-muted-foreground">Choose your adventure and test your wits</p>
         </div>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-6xl mx-auto">
           <GameCard
             title="Deceptive Mind"
             description="A thrilling game of deduction and deception. Work together to eliminate the wrong items while the imposter tries to mislead you."
@@ -498,6 +651,15 @@ function GamePlatformContent() {
             bgColor="bg-gradient-to-br from-accent/20 to-accent/10"
             textColor="text-accent"
             onClick={() => handleGameSelect('hidden-word')}
+          />
+
+          <GameCard
+            title="Witness"
+            description="Location, weapon, suspect! Help the team guess correctly while protecting the witness from being exposed by the suspects."
+            icon={Eye}
+            bgColor="bg-gradient-to-br from-purple-500/20 to-purple-400/10"
+            textColor="text-purple-600"
+            onClick={() => handleGameSelect('witness')}
           />
         </div>
         
@@ -529,18 +691,19 @@ function GamePlatformContent() {
         </Button>
         <h2 className="text-2xl font-bold">
           {selectedGameType === 'deceptive-mind' ? 'Deceptive Mind' : 
-           selectedGameType === 'hidden-word' ? 'The Hidden Word' : 'Join Any Game'}
+           selectedGameType === 'hidden-word' ? 'The Hidden Word' : 
+           selectedGameType === 'witness' ? 'Witness' : 'Join Any Game'}
         </h2>
       </div>
 
       {selectedGameType === 'deceptive-mind' && (
-        <GameProvider>
+    <GameProvider> 
           <DeceptiveMindActions 
             username={username} 
             setUsername={handleUsernameChange} 
             isClient={isClient} 
           />
-        </GameProvider>
+    </GameProvider>
       )}
 
       {selectedGameType === 'hidden-word' && (
@@ -551,6 +714,16 @@ function GamePlatformContent() {
             isClient={isClient} 
           />
         </HiddenWordGameProvider>
+      )}
+
+      {selectedGameType === 'witness' && (
+        <WitnessGameProvider>
+          <WitnessActions 
+            username={username} 
+            setUsername={handleUsernameChange} 
+            isClient={isClient} 
+          />
+        </WitnessGameProvider>
       )}
 
       {!selectedGameType && (

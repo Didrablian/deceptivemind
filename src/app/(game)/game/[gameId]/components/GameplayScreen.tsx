@@ -225,7 +225,7 @@ export default function GameplayScreen() {
 
   const handleImposterAccuseHelper = async (accusedPlayerId: string) => {
     try {
-      await imposterAccuseHelperInTwist(accusedPlayerId);
+    await imposterAccuseHelperInTwist(accusedPlayerId);
       toast({ title: "Accusation Made", description: "Your accusation has been submitted.", variant: "default" });
     } catch (error) {
       console.error("Error making accusation:", error);
@@ -332,18 +332,18 @@ export default function GameplayScreen() {
         </CardContent>
         <CardFooter className="p-4 border-t">
           <div className="w-full space-y-3">
-            <div className="text-sm text-muted-foreground space-y-1">
-              <div>Status: <Badge variant={gameState.status === 'finished' ? 'default' : 'secondary'}>{gameState.status.replace('-', ' ').toUpperCase()}</Badge></div>
-              <div>Eliminations: {gameState.eliminationCount}/{gameState.maxEliminations}</div>
-               {gameState.status === 'post-guess-reveal' && localPlayer.role === 'Imposter' && (
-                <div className="text-accent font-semibold mt-2">Your team guessed the {itemTypeDisplay}! Now, identify the Helper from the players list.</div>
-              )}
-              {gameState.status === 'post-guess-reveal' && localPlayer.role !== 'Imposter' && (
-                <div className="text-primary font-semibold mt-2">Your team guessed the {itemTypeDisplay}! Waiting for Imposters to identify the Helper...</div>
-              )}
-               {gameState.status === 'post-guess-reveal' && localPlayer.role === 'Helper' && (
-                <div className="text-green-600 font-semibold mt-2">Your team found the {itemTypeDisplay}! Stay hidden, the Imposters are trying to find you!</div>
-              )}
+          <div className="text-sm text-muted-foreground space-y-1">
+            <div>Status: <Badge variant={gameState.status === 'finished' ? 'default' : 'secondary'}>{gameState.status.replace('-', ' ').toUpperCase()}</Badge></div>
+            <div>Eliminations: {gameState.eliminationCount}/{gameState.maxEliminations}</div>
+             {gameState.status === 'post-guess-reveal' && localPlayer.role === 'Imposter' && (
+              <div className="text-accent font-semibold mt-2">Your team guessed the {itemTypeDisplay}! Now, identify the Helper from the players list.</div>
+            )}
+            {gameState.status === 'post-guess-reveal' && localPlayer.role !== 'Imposter' && (
+              <div className="text-primary font-semibold mt-2">Your team guessed the {itemTypeDisplay}! Waiting for Imposters to identify the Helper...</div>
+            )}
+             {gameState.status === 'post-guess-reveal' && localPlayer.role === 'Helper' && (
+              <div className="text-green-600 font-semibold mt-2">Your team found the {itemTypeDisplay}! Stay hidden, the Imposters are trying to find you!</div>
+            )}
             </div>
             <AlertDialog>
               <AlertDialogTrigger asChild>
