@@ -1,10 +1,12 @@
 "use client";
 
-import React, { use, useEffect } from 'react';
+import React, { use, useEffect, useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { Input } from '@/components/ui/input';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { useWitnessGame } from '@/context/WitnessGameContext';
 import { WitnessPlayer } from '@/lib/witnessTypes';
 import { 
@@ -18,7 +20,11 @@ import {
   Users,
   CheckCircle,
   XCircle,
-  Crown
+  Crown,
+  Send,
+  MessageCircle,
+  Bot,
+  Plus
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -32,9 +38,33 @@ export default function WitnessGamePage({ params }: { params: Promise<{ gameId: 
     voteWitness, 
     timeRemaining,
     isHost,
-    restartGame
+    restartGame,
+    sendChatMessage,
+    addBot
   } = useWitnessGame();
   const router = useRouter();
+
+  const [chatMessage, setChatMessage] = useState('');
+  const [showChat, setShowChat] = useState(false);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      const scrollContainer = chatScrollRef.current.querySelector('[data-radix-scroll-area-viewport]');
+      if (scrollContainer) {
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      }
+    }
+  }, [gameState?.chatMessages]);
+
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatMessage.trim()) return;
+    
+    await sendChatMessage(chatMessage);
+    setChatMessage('');
+  };
 
   // Redirect to lobby when game restarts
   useEffect(() => {
@@ -364,8 +394,9 @@ export default function WitnessGamePage({ params }: { params: Promise<{ gameId: 
                     {gameState.players.map((player) => (
                       <div key={player.id} className="flex items-center justify-between p-2 bg-white dark:bg-gray-900 rounded">
                         <div className="flex items-center gap-2">
-                          {getRoleIcon(player.role || '')}
+                          {player.role === 'judge' ? getRoleIcon(player.role || '') : <Users className="h-4 w-4" />}
                           <span className="font-medium">{player.name}</span>
+                          {player.isBot && <Bot className="h-3 w-3 text-blue-500" />}
                           <Badge variant="outline" className={`text-xs ${getRoleColor(player.role || '')}`}>
                             {player.role}
                           </Badge>
@@ -431,6 +462,7 @@ export default function WitnessGamePage({ params }: { params: Promise<{ gameId: 
                   <div className="flex items-center gap-2">
                     {player.role === 'judge' ? getRoleIcon(player.role || '') : <Users className="h-4 w-4" />}
                     <span className="font-medium text-sm">{player.name}</span>
+                    {player.isBot && <Bot className="h-3 w-3 text-blue-500" />}
                   </div>
                   <div className="flex items-center gap-1">
                     {gameState.selectedSuspect === player.id && (
@@ -464,9 +496,112 @@ export default function WitnessGamePage({ params }: { params: Promise<{ gameId: 
                 </div>
               </div>
             </div>
+
+            {/* Bot Management */}
+            {isHost && gameState.phase === 'waiting' && gameState.players.length < 10 && (
+              <div className="mt-4 pt-4 border-t">
+                <Button 
+                  onClick={addBot}
+                  variant="outline" 
+                  size="sm" 
+                  className="w-full"
+                >
+                  <Plus className="h-3 w-3 mr-1" />
+                  Add Bot
+                </Button>
+              </div>
+            )}
+
+            {/* Chat Toggle */}
+            {gameState.phase !== 'waiting' && (
+              <div className="mt-4 pt-4 border-t">
+                <Button 
+                  onClick={() => setShowChat(!showChat)}
+                  variant="outline" 
+                  size="sm" 
+                  className="w-full"
+                >
+                  <MessageCircle className="h-3 w-3 mr-1" />
+                  {showChat ? 'Hide Chat' : 'Show Chat'}
+                  {gameState.chatMessages && gameState.chatMessages.length > 0 && (
+                    <Badge variant="secondary" className="ml-2 text-xs">
+                      {gameState.chatMessages.length}
+                    </Badge>
+                  )}
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
+
+      {/* Chat Panel */}
+      {showChat && gameState.phase !== 'waiting' && (
+        <Card className="mt-4">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <MessageCircle className="h-5 w-5" />
+              Discussion
+            </CardTitle>
+            <CardDescription>
+              Chat with other players during the investigation
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {/* Chat Messages */}
+              <ScrollArea className="h-64 w-full border rounded-lg p-3" ref={chatScrollRef}>
+                <div className="space-y-2">
+                  {gameState.chatMessages && gameState.chatMessages.length > 0 ? (
+                    gameState.chatMessages.map((msg) => {
+                      const sender = gameState.players.find(p => p.id === msg.playerId);
+                      const isOwnMessage = msg.playerId === localPlayer.id;
+                      
+                      return (
+                        <div key={msg.id} className={`flex ${isOwnMessage ? 'justify-end' : 'justify-start'}`}>
+                          <div 
+                            className={`max-w-[70%] rounded-lg px-3 py-2 ${
+                              isOwnMessage 
+                                ? 'bg-purple-600 text-white' 
+                                : 'bg-muted'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1 mb-1">
+                              <span className={`text-xs font-medium ${isOwnMessage ? 'text-purple-100' : 'text-muted-foreground'}`}>
+                                {sender?.role === 'judge' ? `[judge] - ${msg.playerName}` : msg.playerName}
+                              </span>
+                              {sender?.isBot && <Bot className="h-3 w-3 text-blue-400" />}
+                            </div>
+                            <p className="text-sm">{msg.text}</p>
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-center text-muted-foreground text-sm py-8">
+                      No messages yet. Start the discussion!
+                    </div>
+                  )}
+                </div>
+              </ScrollArea>
+
+              {/* Chat Input */}
+              <form onSubmit={handleSendMessage} className="flex gap-2">
+                <Input
+                  value={chatMessage}
+                  onChange={(e) => setChatMessage(e.target.value)}
+                  placeholder="Type your message..."
+                  className="flex-1"
+                  maxLength={200}
+                />
+                <Button type="submit" size="sm" disabled={!chatMessage.trim()}>
+                  <Send className="h-4 w-4" />
+                </Button>
+              </form>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 } 

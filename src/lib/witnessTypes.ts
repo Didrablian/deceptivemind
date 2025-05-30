@@ -25,6 +25,16 @@ export interface WitnessPlayer {
   // Detective clues (only for detective role)
   locationClue?: string;
   weaponClue?: string;
+  // Bot support
+  isBot?: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  playerId: string;
+  playerName: string;
+  text: string;
+  timestamp: number;
 }
 
 export interface WitnessGameState {
@@ -46,6 +56,9 @@ export interface WitnessGameState {
   
   // Voting
   suspectVotes: Record<string, string>; // suspect playerId -> witness playerId they voted for
+  
+  // Chat
+  chatMessages: ChatMessage[];
   
   // Timing
   phaseStartTime: number;

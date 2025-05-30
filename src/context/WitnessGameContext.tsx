@@ -8,6 +8,7 @@ import {
   PlayerRole,
   GamePhase,
   GameStage,
+  ChatMessage,
   LOCATION_WORDS,
   WEAPON_WORDS,
   getRandomWords,
@@ -15,6 +16,7 @@ import {
   checkWinCondition
 } from '@/lib/witnessTypes';
 import { generateDetectiveClues } from '@/lib/witnessAI';
+import { generateBotChatMessage, generateBotDecision } from '@/lib/witnessAI';
 import { db } from '@/lib/firebase';
 import { 
   doc, 
@@ -42,6 +44,12 @@ interface WitnessGameContextType {
   voteWitness: (playerId: string) => Promise<void>;
   nextPhase: () => Promise<void>;
   restartGame: () => Promise<void>;
+  
+  // Chat
+  sendChatMessage: (text: string) => Promise<void>;
+  
+  // Bot management
+  addBot: () => Promise<void>;
   
   // Utility
   isLoading: boolean;
@@ -119,8 +127,8 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
 
     try {
       const gameId = generateGameId();
-      const locationWords = getRandomWords(LOCATION_WORDS, 26);
-      const weaponWords = getRandomWords(WEAPON_WORDS, 26);
+      const locationWords = getRandomWords(LOCATION_WORDS, 9);
+      const weaponWords = getRandomWords(WEAPON_WORDS, 9);
       const correctLocation = locationWords[Math.floor(Math.random() * locationWords.length)];
       const correctWeapon = weaponWords[Math.floor(Math.random() * weaponWords.length)];
       
@@ -140,6 +148,7 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
         correctLocation,
         correctWeapon,
         suspectVotes: {},
+        chatMessages: [],
         phaseStartTime: Date.now(),
         phaseEndTime: 0,
         settings: {
@@ -204,8 +213,8 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
         role: roles[index]
       }));
 
-      const locationWords = getRandomWords(LOCATION_WORDS, 26);
-      const weaponWords = getRandomWords(WEAPON_WORDS, 26);
+      const locationWords = getRandomWords(LOCATION_WORDS, 9);
+      const weaponWords = getRandomWords(WEAPON_WORDS, 9);
       const correctLocation = locationWords[Math.floor(Math.random() * locationWords.length)];
       const correctWeapon = weaponWords[Math.floor(Math.random() * weaponWords.length)];
       
@@ -414,6 +423,7 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
         selectedWeapon: null,
         selectedSuspect: null,
         suspectVotes: {},
+        chatMessages: [], // Reset chat messages
         teamWon: null,
         gameEndTime: null,
         phaseStartTime: Date.now(),
@@ -599,6 +609,58 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
     }
   }, [gameState]);
 
+  const sendChatMessage = useCallback(async (text: string): Promise<void> => {
+    if (!gameState || !localPlayer || !text.trim()) return;
+
+    try {
+      const message: ChatMessage = {
+        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        playerId: localPlayer.id,
+        playerName: localPlayer.name,
+        text: text.trim(),
+        timestamp: Date.now()
+      };
+
+      await updateDoc(doc(db, 'witnessGames', gameState.id), {
+        chatMessages: arrayUnion(message),
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error sending chat message:', error);
+      toast({ title: "Error", description: "Failed to send message.", variant: "destructive" });
+    }
+  }, [gameState, localPlayer, toast]);
+
+  const addBot = useCallback(async (): Promise<void> => {
+    if (!gameState || !isHost || gameState.players.length >= 10) return;
+
+    try {
+      const botNames = ['Detective Alpha', 'Agent Beta', 'Inspector Gamma', 'Officer Delta', 'Sleuth Epsilon'];
+      const usedNames = gameState.players.map(p => p.name);
+      const availableNames = botNames.filter(name => !usedNames.includes(name));
+      
+      if (availableNames.length === 0) return;
+
+      const botName = availableNames[0];
+      const botId = `bot_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      await updateDoc(doc(db, 'witnessGames', gameState.id), {
+        players: arrayUnion({
+          id: botId,
+          name: botName,
+          isAlive: true,
+          isReady: false,
+          lastSeen: Date.now(),
+          isBot: true
+        }),
+        updatedAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error adding bot:', error);
+      toast({ title: "Error", description: "Failed to add bot.", variant: "destructive" });
+    }
+  }, [gameState, isHost, toast]);
+
   // Subscribe to game updates
   useEffect(() => {
     const gameId = window.location.pathname.split('/').pop();
@@ -629,6 +691,166 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
     return unsubscribe;
   }, []);
 
+  // Enhanced bot behavior with immediate and periodic chat
+  useEffect(() => {
+    if (!gameState || gameState.phase === 'waiting' || gameState.phase === 'reveal' || gameState.phase === 'finished') return;
+
+    const bots = gameState.players.filter(p => p.isBot);
+    if (bots.length === 0) return;
+
+    // Immediate bot message when phase changes to discussion/prep
+    if (gameState.phase.includes('discussion') || gameState.phase.includes('prep')) {
+      // Send first bot message quickly after phase change
+      const immediateTimer = setTimeout(async () => {
+        const randomBot = bots[Math.floor(Math.random() * bots.length)];
+        try {
+          console.log(`Bot ${randomBot.name} sending immediate message for phase ${gameState.phase}`);
+          const message = await generateBotChatMessage(gameState, randomBot, gameState.phase, []);
+          
+          const chatMessage = {
+            id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            playerId: randomBot.id,
+            playerName: randomBot.name,
+            text: message,
+            timestamp: Date.now()
+          };
+          
+          await updateDoc(doc(db, 'witnessGames', gameState.id), {
+            chatMessages: arrayUnion(chatMessage),
+            updatedAt: serverTimestamp()
+          });
+          
+          console.log(`Bot immediate message sent:`, message);
+        } catch (error) {
+          console.error('Error sending immediate bot message:', error);
+        }
+      }, 2000); // Send first message after 2 seconds
+
+      // Periodic bot messages throughout the phase
+      const periodicTimer = setInterval(async () => {
+        const randomBot = bots[Math.floor(Math.random() * bots.length)];
+        if (Math.random() < 0.4) { // 40% chance for periodic chat (reduced since we have responsive chat)
+          try {
+            console.log(`Bot ${randomBot.name} sending periodic message for phase ${gameState.phase}`);
+            const recentMessages = gameState.chatMessages?.slice(-5) || [];
+            const message = await generateBotChatMessage(gameState, randomBot, gameState.phase, recentMessages);
+            
+            const chatMessage = {
+              id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              playerId: randomBot.id,
+              playerName: randomBot.name,
+              text: message,
+              timestamp: Date.now()
+            };
+            
+            await updateDoc(doc(db, 'witnessGames', gameState.id), {
+              chatMessages: arrayUnion(chatMessage),
+              updatedAt: serverTimestamp()
+            });
+            
+            console.log(`Bot periodic message sent:`, message);
+          } catch (error) {
+            console.error('Error sending periodic bot message:', error);
+          }
+        }
+      }, 12000); // Every 12 seconds, check if bot should chat
+
+      return () => {
+        clearTimeout(immediateTimer);
+        clearInterval(periodicTimer);
+      };
+    }
+  }, [gameState?.phase, gameState?.players?.length]);
+
+  // Responsive bot chat - reacts to human messages
+  useEffect(() => {
+    if (!gameState || gameState.phase === 'waiting' || gameState.phase === 'reveal' || gameState.phase === 'finished') return;
+    if (!gameState.chatMessages || gameState.chatMessages.length === 0) return;
+
+    const bots = gameState.players.filter(p => p.isBot);
+    if (bots.length === 0) return;
+
+    // Get the last message
+    const lastMessage = gameState.chatMessages[gameState.chatMessages.length - 1];
+    const lastMessageSender = gameState.players.find(p => p.id === lastMessage.playerId);
+    
+    // Only respond to human players, not other bots
+    if (lastMessageSender && !lastMessageSender.isBot && lastMessage.timestamp > Date.now() - 5000) { // Message is less than 5 seconds old
+      const responseTimer = setTimeout(async () => {
+        // 70% chance a bot responds to human message
+        if (Math.random() < 0.7) {
+          const randomBot = bots[Math.floor(Math.random() * bots.length)];
+          try {
+            console.log(`Bot ${randomBot.name} responding to ${lastMessageSender.name}: "${lastMessage.text}"`);
+            const recentMessages = gameState.chatMessages.slice(-3); // Last 3 messages for context
+            const message = await generateBotChatMessage(gameState, randomBot, gameState.phase, recentMessages);
+            
+            const chatMessage = {
+              id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              playerId: randomBot.id,
+              playerName: randomBot.name,
+              text: message,
+              timestamp: Date.now()
+            };
+            
+            await updateDoc(doc(db, 'witnessGames', gameState.id), {
+              chatMessages: arrayUnion(chatMessage),
+              updatedAt: serverTimestamp()
+            });
+            
+            console.log(`Bot response sent:`, message);
+          } catch (error) {
+            console.error('Error sending bot response:', error);
+          }
+        }
+      }, Math.random() * 3000 + 2000); // 2-5 seconds delay for natural response
+
+      return () => clearTimeout(responseTimer);
+    }
+  }, [gameState?.chatMessages?.length]); // Trigger when new messages are added
+
+  // Bot judge decisions
+  useEffect(() => {
+    if (!gameState || gameState.phase === 'waiting' || gameState.phase === 'reveal' || gameState.phase === 'finished') return;
+
+    const bots = gameState.players.filter(p => p.isBot);
+    const judgeBot = bots.find(p => p.role === 'judge');
+    
+    if (judgeBot && (gameState.phase.includes('discussion') || gameState.phase.includes('prep'))) {
+      const decisionTimer = setTimeout(async () => {
+        try {
+          if (gameState.phase.includes('location') && !gameState.selectedLocation) {
+            console.log(`Judge bot ${judgeBot.name} making location decision`);
+            const decision = await generateBotDecision(gameState, judgeBot, 'word', gameState.locationWords);
+            await updateDoc(doc(db, 'witnessGames', gameState.id), {
+              selectedLocation: decision,
+              updatedAt: serverTimestamp()
+            });
+          } else if (gameState.phase.includes('weapon') && !gameState.selectedWeapon) {
+            console.log(`Judge bot ${judgeBot.name} making weapon decision`);
+            const decision = await generateBotDecision(gameState, judgeBot, 'word', gameState.weaponWords);
+            await updateDoc(doc(db, 'witnessGames', gameState.id), {
+              selectedWeapon: decision,
+              updatedAt: serverTimestamp()
+            });
+          } else if (gameState.phase.includes('suspect') && !gameState.selectedSuspect) {
+            console.log(`Judge bot ${judgeBot.name} making suspect decision`);
+            const nonJudgePlayers = gameState.players.filter(p => p.role !== 'judge');
+            const decision = await generateBotDecision(gameState, judgeBot, 'suspect', nonJudgePlayers.map(p => p.id));
+            await updateDoc(doc(db, 'witnessGames', gameState.id), {
+              selectedSuspect: decision,
+              updatedAt: serverTimestamp()
+            });
+          }
+        } catch (error) {
+          console.error('Error with bot judge decision:', error);
+        }
+      }, Math.random() * 20000 + 15000); // Random delay 15-35 seconds
+
+      return () => clearTimeout(decisionTimer);
+    }
+  }, [gameState?.phase, gameState?.selectedLocation, gameState?.selectedWeapon, gameState?.selectedSuspect]);
+
   const value: WitnessGameContextType = {
     gameState,
     localPlayerId,
@@ -642,6 +864,8 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
     voteWitness,
     nextPhase,
     restartGame,
+    sendChatMessage,
+    addBot,
     isLoading,
     timeRemaining
   };

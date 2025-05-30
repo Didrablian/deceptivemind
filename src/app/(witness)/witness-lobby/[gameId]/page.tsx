@@ -6,12 +6,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { useWitnessGame } from '@/context/WitnessGameContext';
 import { useRouter } from 'next/navigation';
-import { Copy, Users, Clock, Eye, Shield, Target, Gavel, ArrowRight } from 'lucide-react';
+import { Copy, Users, Clock, Eye, Shield, Target, Gavel, ArrowRight, Plus, Bot } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 export default function WitnessLobbyPage({ params }: { params: Promise<{ gameId: string }> }) {
   const { gameId } = use(params);
-  const { gameState, localPlayer, isHost, startGame } = useWitnessGame();
+  const { gameState, localPlayer, isHost, startGame, addBot } = useWitnessGame();
   const router = useRouter();
   const { toast } = useToast();
 
@@ -90,7 +90,10 @@ export default function WitnessLobbyPage({ params }: { params: Promise<{ gameId:
                       : 'bg-muted'
                   }`}
                 >
-                  <span className="font-medium">{player.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{player.name}</span>
+                    {player.isBot && <Bot className="h-4 w-4 text-blue-500" />}
+                  </div>
                   <div className="flex items-center gap-2">
                     {index === 0 && (
                       <Badge variant="secondary" className="text-xs">
@@ -108,7 +111,18 @@ export default function WitnessLobbyPage({ params }: { params: Promise<{ gameId:
             </div>
             
             {isHost && (
-              <div className="mt-4 pt-4 border-t">
+              <div className="mt-4 pt-4 border-t space-y-2">
+                {gameState.players.length < 10 && (
+                  <Button
+                    onClick={addBot}
+                    variant="outline"
+                    className="w-full"
+                    size="sm"
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add Bot Player
+                  </Button>
+                )}
                 <Button
                   onClick={handleStartGame}
                   disabled={!canStart}
