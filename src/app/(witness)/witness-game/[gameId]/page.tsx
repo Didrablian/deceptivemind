@@ -40,7 +40,8 @@ export default function WitnessGamePage({ params }: { params: Promise<{ gameId: 
     isHost,
     restartGame,
     sendChatMessage,
-    addBot
+    addBot,
+    guessWitness
   } = useWitnessGame();
   const router = useRouter();
 
@@ -111,6 +112,7 @@ export default function WitnessGamePage({ params }: { params: Promise<{ gameId: 
       case 'weapon-voting': return localPlayer.role === 'judge' ? 'Select the Weapon' : 'Judge is selecting the Weapon';
       case 'suspect-discussion': return localPlayer.role === 'judge' ? 'Listen to discussion and select the suspect' : 'Discuss who you think is the Suspect';
       case 'suspect-voting': return 'Judge is selecting the Suspect';
+      case 'imposter-counterattack': return localPlayer.role === 'suspect' ? 'Last chance! Who is the Witness?' : 'Imposter is trying to identify the Witness...';
       case 'reveal': return 'Game Over - Results revealed';
       case 'finished': return 'Game Finished';
       default: return 'Waiting...';
@@ -135,7 +137,10 @@ export default function WitnessGamePage({ params }: { params: Promise<{ gameId: 
     ? gameState.correctLocation
     : gameState.correctWeapon;
 
-  const timeProgress = timeRemaining > 0 && gameState.phase !== 'reveal' && gameState.phase !== 'finished' ? (timeRemaining / 90) * 100 : 0;
+  const timeProgress = timeRemaining > 0 && gameState.phase !== 'reveal' && gameState.phase !== 'finished' ? 
+    (timeRemaining / (gameState.phase.includes('location') || gameState.phase.includes('weapon') ? 120 : 
+     gameState.phase.includes('suspect') ? 90 : 
+     gameState.phase === 'imposter-counterattack' ? 30 : 90)) * 100 : 0;
 
   // Reset timer for game over phases
   const displayTimeRemaining = (gameState.phase === 'reveal' || gameState.phase === 'finished') ? 0 : timeRemaining;
@@ -272,9 +277,11 @@ export default function WitnessGamePage({ params }: { params: Promise<{ gameId: 
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               {gameState.phase.includes('location') ? <MapPin className="h-5 w-5" /> : 
-               gameState.phase.includes('weapon') ? <Sword className="h-5 w-5" /> : <Users className="h-5 w-5" />}
+               gameState.phase.includes('weapon') ? <Sword className="h-5 w-5" /> : 
+               gameState.phase === 'imposter-counterattack' ? <Eye className="h-5 w-5" /> : <Users className="h-5 w-5" />}
               {gameState.phase.includes('location') ? 'Location Grid' : 
-               gameState.phase.includes('weapon') ? 'Weapon Grid' : 'Suspect Selection'}
+               gameState.phase.includes('weapon') ? 'Weapon Grid' : 
+               gameState.phase === 'imposter-counterattack' ? 'Witness Identification' : 'Suspect Selection'}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -337,6 +344,56 @@ export default function WitnessGamePage({ params }: { params: Promise<{ gameId: 
                   <div className="text-center p-4 bg-blue-50 dark:bg-blue-950/20 rounded-lg">
                     <p className="text-sm text-blue-800 dark:text-blue-300">
                       Judge is choosing a suspect...
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Imposter Counter-Attack Phase */}
+            {gameState.phase === 'imposter-counterattack' && (
+              <div className="space-y-3">
+                {localPlayer.role === 'suspect' && (
+                  <div className="space-y-3">
+                    <div className="text-center p-4 bg-red-50 dark:bg-red-950/20 rounded-lg">
+                      <h3 className="text-lg font-bold text-red-800 dark:text-red-300 mb-2">
+                        🎯 Final Chance!
+                      </h3>
+                      <p className="text-sm text-red-700 dark:text-red-300">
+                        Everything was guessed correctly! As the Imposter, you have one last chance to win by identifying the Witness.
+                      </p>
+                    </div>
+                    
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">Who is the Witness?</p>
+                      <div className="grid grid-cols-1 gap-2">
+                        {gameState.players
+                          .filter(p => p.role !== 'judge' && p.role !== 'suspect')
+                          .map((player) => (
+                          <Button
+                            key={player.id}
+                            variant="outline"
+                            className="justify-start h-12 hover:bg-red-50 dark:hover:bg-red-950/20"
+                            onClick={() => guessWitness(player.id)}
+                          >
+                            <div className="flex items-center gap-2">
+                              <Eye className="h-4 w-4" />
+                              <span>{player.name}</span>
+                            </div>
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {localPlayer.role !== 'suspect' && (
+                  <div className="text-center p-4 bg-orange-50 dark:bg-orange-950/20 rounded-lg">
+                    <h3 className="text-lg font-bold text-orange-800 dark:text-orange-300 mb-2">
+                      ⏰ Imposter's Last Stand
+                    </h3>
+                    <p className="text-sm text-orange-700 dark:text-orange-300">
+                      The Imposter is trying to identify the Witness. Stay calm and don't give anything away!
                     </p>
                   </div>
                 )}

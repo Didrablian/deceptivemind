@@ -154,11 +154,11 @@ export default function WitnessLobbyPage({ params }: { params: Promise<{ gameId:
             <CardContent>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
                 <div className="p-3 bg-purple-50 dark:bg-purple-950/20 rounded-lg">
-                  <div className="text-2xl font-bold text-purple-600">3</div>
+                  <div className="text-2xl font-bold text-purple-600">4</div>
                   <div className="text-sm text-muted-foreground">Stages</div>
                 </div>
                 <div className="p-3 bg-purple-50 dark:bg-purple-950/20 rounded-lg">
-                  <div className="text-2xl font-bold text-purple-600">5:30</div>
+                  <div className="text-2xl font-bold text-purple-600">6:00</div>
                   <div className="text-sm text-muted-foreground">Minutes</div>
                 </div>
                 <div className="p-3 bg-purple-50 dark:bg-purple-950/20 rounded-lg">
@@ -181,6 +181,10 @@ export default function WitnessLobbyPage({ params }: { params: Promise<{ gameId:
                   <div className="flex items-center gap-2">
                     <Badge variant="outline" className="text-xs">3</Badge>
                     <span>Suspect Identification (1:30 min)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-xs">4</Badge>
+                    <span>Witness Identification (0:30 min)</span>
                   </div>
                 </div>
               </div>
@@ -260,7 +264,7 @@ export default function WitnessLobbyPage({ params }: { params: Promise<{ gameId:
                     🏆 Team Victory
                   </h4>
                   <p className="text-sm text-green-700 dark:text-green-300">
-                    Both Location and Weapon are guessed correctly AND the Witness is not exposed by the Suspects.
+                    Guess Location, Weapon, and Suspect correctly AND the Suspects fail to identify the Witness in the final phase.
                   </p>
                 </div>
                 
@@ -269,7 +273,7 @@ export default function WitnessLobbyPage({ params }: { params: Promise<{ gameId:
                     💀 Suspects Victory
                   </h4>
                   <p className="text-sm text-red-700 dark:text-red-300">
-                    Either Location OR Weapon is guessed incorrectly, OR the Suspects successfully identify the Witness.
+                    Either Location, Weapon, or Suspect is guessed incorrectly, OR if everything is correct, the Suspects successfully identify the Witness in the final counterattack phase.
                   </p>
                 </div>
               </div>

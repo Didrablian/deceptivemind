@@ -42,6 +42,7 @@ interface WitnessGameContextType {
   selectWord: (word: string) => Promise<void>;
   selectSuspect: (playerId: string) => Promise<void>;
   voteWitness: (playerId: string) => Promise<void>;
+  guessWitness: (playerId: string) => Promise<void>;
   nextPhase: () => Promise<void>;
   restartGame: () => Promise<void>;
   
@@ -117,6 +118,7 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
       case 'weapon-prep': return now + settings.weaponPrepTime * 1000;
       case 'weapon-discussion': return now + settings.weaponDiscussionTime * 1000;
       case 'suspect-discussion': return now + settings.suspectDiscussionTime * 1000;
+      case 'imposter-counterattack': return now + settings.imposterCounterattackTime * 1000;
       default: return now + 10000; // 10 seconds default
     }
   };
@@ -153,10 +155,11 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
         phaseEndTime: 0,
         settings: {
           locationPrepTime: 30,
-          locationDiscussionTime: 90,
+          locationDiscussionTime: 120,
           weaponPrepTime: 30,
-          weaponDiscussionTime: 90,
-          suspectDiscussionTime: 90
+          weaponDiscussionTime: 120,
+          suspectDiscussionTime: 90,
+          imposterCounterattackTime: 30
         },
         createdAt: Date.now(),
         updatedAt: Date.now()
@@ -346,18 +349,34 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
       const selectedPlayer = gameState.players.find(p => p.id === playerId);
       const updateData: any = {
         selectedSuspect: playerId,
-        phase: 'reveal',
-        gameEndTime: serverTimestamp(),
         updatedAt: serverTimestamp()
       };
       
       // Check if selected player is actually a suspect
       if (selectedPlayer?.role !== 'suspect') {
         // Wrong suspect - suspects win
+        updateData.phase = 'reveal';
         updateData.teamWon = false;
+        updateData.gameEndTime = serverTimestamp();
       } else {
-        // Correct suspect selected - team wins
-        updateData.teamWon = true;
+        // Correct suspect selected - check if location and weapon were also correct
+        const locationCorrect = gameState.selectedLocation === gameState.correctLocation;
+        const weaponCorrect = gameState.selectedWeapon === gameState.correctWeapon;
+        
+        if (locationCorrect && weaponCorrect) {
+          // Everything correct - give imposter a chance to identify witness
+          updateData.phase = 'imposter-counterattack';
+          updateData.phaseStartTime = serverTimestamp();
+          const endTime = getPhaseEndTime('imposter-counterattack', gameState.settings);
+          if (endTime && endTime > 0) {
+            updateData.phaseEndTime = endTime;
+          }
+        } else {
+          // Something was wrong earlier - team wins
+          updateData.phase = 'reveal';
+          updateData.teamWon = true;
+          updateData.gameEndTime = serverTimestamp();
+        }
       }
 
       // Remove any undefined values
@@ -397,6 +416,36 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
     }
   }, [gameState, localPlayer, toast]);
 
+  const guessWitness = useCallback(async (playerId: string): Promise<void> => {
+    if (!gameState || !localPlayer || localPlayer.role !== 'suspect') return;
+
+    try {
+      const updateData: any = {
+        imposterWitnessGuess: playerId,
+        phase: 'reveal',
+        gameEndTime: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+      
+      // Check final win condition with imposter's guess
+      const tempGameState = { ...gameState, imposterWitnessGuess: playerId };
+      const result = checkWinCondition(tempGameState);
+      updateData.teamWon = result.teamWon;
+
+      // Remove any undefined values
+      Object.keys(updateData).forEach(key => {
+        if (updateData[key] === undefined) {
+          delete updateData[key];
+        }
+      });
+
+      await updateDoc(doc(db, 'witnessGames', gameState.id), updateData);
+    } catch (error) {
+      console.error('Error guessing witness:', error);
+      toast({ title: "Error", description: "Failed to guess witness.", variant: "destructive" });
+    }
+  }, [gameState, localPlayer, toast]);
+
   const restartGame = useCallback(async (): Promise<void> => {
     if (!gameState || !isHost) return;
 
@@ -422,6 +471,7 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
         selectedLocation: null,
         selectedWeapon: null,
         selectedSuspect: null,
+        imposterWitnessGuess: null,
         suspectVotes: {},
         chatMessages: [], // Reset chat messages
         teamWon: null,
@@ -582,6 +632,12 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
           updateData.teamWon = result.teamWon;
           updateData.gameEndTime = serverTimestamp();
           break;
+        case 'imposter-counterattack':
+          // Time's up - no guess made, team wins
+          nextPhase = 'reveal';
+          updateData.teamWon = true;
+          updateData.gameEndTime = serverTimestamp();
+          break;
         case 'reveal':
           nextPhase = 'finished';
           break;
@@ -729,7 +785,7 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
       // Periodic bot messages throughout the phase
       const periodicTimer = setInterval(async () => {
         const randomBot = bots[Math.floor(Math.random() * bots.length)];
-        if (Math.random() < 0.4) { // 40% chance for periodic chat (reduced since we have responsive chat)
+        if (Math.random() < 0.4) { // 40% chance for periodic chat (increased responsiveness)
           try {
             console.log(`Bot ${randomBot.name} sending periodic message for phase ${gameState.phase}`);
             const recentMessages = gameState.chatMessages?.slice(-5) || [];
@@ -753,7 +809,7 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
             console.error('Error sending periodic bot message:', error);
           }
         }
-      }, 12000); // Every 12 seconds, check if bot should chat
+      }, 12000); // Every 12 seconds, check if bot should chat (faster interval)
 
       return () => {
         clearTimeout(immediateTimer);
@@ -777,8 +833,8 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
     // Only respond to human players, not other bots
     if (lastMessageSender && !lastMessageSender.isBot && lastMessage.timestamp > Date.now() - 5000) { // Message is less than 5 seconds old
       const responseTimer = setTimeout(async () => {
-        // 70% chance a bot responds to human message
-        if (Math.random() < 0.7) {
+        // 60% chance a bot responds to human message (increased responsiveness)
+        if (Math.random() < 0.6) {
           const randomBot = bots[Math.floor(Math.random() * bots.length)];
           try {
             console.log(`Bot ${randomBot.name} responding to ${lastMessageSender.name}: "${lastMessage.text}"`);
@@ -822,34 +878,28 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
           if (gameState.phase.includes('location') && !gameState.selectedLocation) {
             console.log(`Judge bot ${judgeBot.name} making location decision`);
             const decision = await generateBotDecision(gameState, judgeBot, 'word', gameState.locationWords);
-            await updateDoc(doc(db, 'witnessGames', gameState.id), {
-              selectedLocation: decision,
-              updatedAt: serverTimestamp()
-            });
+            // Use selectWord function to trigger proper phase transition
+            await selectWord(decision);
           } else if (gameState.phase.includes('weapon') && !gameState.selectedWeapon) {
             console.log(`Judge bot ${judgeBot.name} making weapon decision`);
             const decision = await generateBotDecision(gameState, judgeBot, 'word', gameState.weaponWords);
-            await updateDoc(doc(db, 'witnessGames', gameState.id), {
-              selectedWeapon: decision,
-              updatedAt: serverTimestamp()
-            });
+            // Use selectWord function to trigger proper phase transition
+            await selectWord(decision);
           } else if (gameState.phase.includes('suspect') && !gameState.selectedSuspect) {
             console.log(`Judge bot ${judgeBot.name} making suspect decision`);
             const nonJudgePlayers = gameState.players.filter(p => p.role !== 'judge');
             const decision = await generateBotDecision(gameState, judgeBot, 'suspect', nonJudgePlayers.map(p => p.id));
-            await updateDoc(doc(db, 'witnessGames', gameState.id), {
-              selectedSuspect: decision,
-              updatedAt: serverTimestamp()
-            });
+            // Use selectSuspect function to trigger proper game end
+            await selectSuspect(decision);
           }
         } catch (error) {
           console.error('Error with bot judge decision:', error);
         }
-      }, Math.random() * 20000 + 15000); // Random delay 15-35 seconds
+      }, Math.random() * 10000 + 5000); // Random delay 5-15 seconds (much faster)
 
       return () => clearTimeout(decisionTimer);
     }
-  }, [gameState?.phase, gameState?.selectedLocation, gameState?.selectedWeapon, gameState?.selectedSuspect]);
+  }, [gameState?.phase, gameState?.selectedLocation, gameState?.selectedWeapon, gameState?.selectedSuspect, selectWord, selectSuspect]);
 
   const value: WitnessGameContextType = {
     gameState,
@@ -862,6 +912,7 @@ export function WitnessGameProvider({ children }: { children: React.ReactNode })
     selectWord,
     selectSuspect,
     voteWitness,
+    guessWitness,
     nextPhase,
     restartGame,
     sendChatMessage,

@@ -517,16 +517,33 @@ function HiddenWordGameContent() {
                   
                   {localPlayer?.isAlive && !gameState.votes.find(v => v.playerId === localPlayerId) && (
                     <div className="grid grid-cols-2 gap-2 mb-4">
-                      {alivePlayers.map(player => (
-                        <Button
-                          key={player.id}
-                          onClick={() => submitVote(player.id)}
-                          variant={player.id === localPlayerId ? "secondary" : "outline"}
-                          size="sm"
-                        >
-                          Hang {player.name} {player.id === localPlayerId && "(yourself)"}
-                        </Button>
-                      ))}
+                      {/* During voting, only show accuser and accused as options */}
+                      {gameState.currentAccusation ? 
+                        [gameState.currentAccusation.accuserId, gameState.currentAccusation.accusedId]
+                          .map(playerId => gameState.players.find(p => p.id === playerId))
+                          .filter(player => player?.isAlive)
+                          .map(player => (
+                            <Button
+                              key={player!.id}
+                              onClick={() => submitVote(player!.id)}
+                              variant={player!.id === localPlayerId ? "secondary" : "outline"}
+                              size="sm"
+                            >
+                              Hang {player!.name} {player!.id === localPlayerId && "(yourself)"}
+                            </Button>
+                          ))
+                        :
+                        alivePlayers.map(player => (
+                          <Button
+                            key={player.id}
+                            onClick={() => submitVote(player.id)}
+                            variant={player.id === localPlayerId ? "secondary" : "outline"}
+                            size="sm"
+                          >
+                            Hang {player.name} {player.id === localPlayerId && "(yourself)"}
+                          </Button>
+                        ))
+                      }
                     </div>
                   )}
 

@@ -12,6 +12,7 @@ export type GamePhase =
   | 'weapon-voting'
   | 'suspect-discussion'
   | 'suspect-voting'
+  | 'imposter-counterattack'
   | 'reveal'
   | 'finished';
 
@@ -54,6 +55,9 @@ export interface WitnessGameState {
   selectedWeapon?: string;
   selectedSuspect?: string;
   
+  // Imposter counter-attack
+  imposterWitnessGuess?: string; // playerId of who imposter thinks is witness
+  
   // Voting
   suspectVotes: Record<string, string>; // suspect playerId -> witness playerId they voted for
   
@@ -67,10 +71,11 @@ export interface WitnessGameState {
   // Settings
   settings: {
     locationPrepTime: number; // 30s
-    locationDiscussionTime: number; // 90s
+    locationDiscussionTime: number; // 120s (2:00 min)
     weaponPrepTime: number; // 30s  
-    weaponDiscussionTime: number; // 90s
-    suspectDiscussionTime: number; // 90s
+    weaponDiscussionTime: number; // 120s (2:00 min)
+    suspectDiscussionTime: number; // 90s (1:30 min)
+    imposterCounterattackTime: number; // 30s
   };
   
   // Game results
@@ -129,11 +134,13 @@ export function assignRoles(playerCount: number): PlayerRole[] {
 }
 
 export function checkWinCondition(gameState: WitnessGameState): { teamWon: boolean; reason: string } {
-  const { selectedLocation, selectedWeapon, correctLocation, correctWeapon, suspectVotes, players } = gameState;
+  const { selectedLocation, selectedWeapon, selectedSuspect, imposterWitnessGuess, correctLocation, correctWeapon, suspectVotes, players } = gameState;
   
-  // Check if both words were guessed correctly
+  // Check if both words were guessed correctly and correct suspect was selected
   const locationCorrect = selectedLocation === correctLocation;
   const weaponCorrect = selectedWeapon === correctWeapon;
+  const selectedPlayer = players.find(p => p.id === selectedSuspect);
+  const suspectCorrect = selectedPlayer?.role === 'suspect';
   
   if (!locationCorrect || !weaponCorrect) {
     return {
@@ -142,24 +149,39 @@ export function checkWinCondition(gameState: WitnessGameState): { teamWon: boole
     };
   }
   
-  // Check if witness was exposed
+  if (!suspectCorrect) {
+    return {
+      teamWon: false,
+      reason: 'Wrong suspect selected'
+    };
+  }
+  
+  // If everything was correct, check for imposter counter-attack
   const witness = players.find(p => p.role === 'witness');
   if (!witness) {
     return { teamWon: false, reason: 'No witness found' };
   }
   
-  // Check if any suspect correctly identified the witness
+  // If imposter made a guess and it was correct, imposter wins
+  if (imposterWitnessGuess && imposterWitnessGuess === witness.id) {
+    return {
+      teamWon: false,
+      reason: 'Imposter correctly identified the witness in counter-attack'
+    };
+  }
+  
+  // Check if witness was exposed during voting (original logic)
   const witnessExposed = Object.values(suspectVotes).some(vote => vote === witness.id);
   
   if (witnessExposed) {
     return {
       teamWon: false,
-      reason: 'Witness was exposed by suspects'
+      reason: 'Witness was exposed by suspects during voting'
     };
   }
   
   return {
     teamWon: true,
-    reason: 'Team successfully protected witness and guessed both words'
+    reason: 'Team successfully protected witness and guessed everything correctly'
   };
 } 

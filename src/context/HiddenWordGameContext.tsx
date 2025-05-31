@@ -518,7 +518,7 @@ export const HiddenWordGameProvider = ({
       });
 
       // Check win conditions and advance phase
-      const winCheck = checkWinConditions(updatedPlayers);
+      const winCheck = checkWinConditions(updatedPlayers, false);
       if (winCheck.winner) {
         await updateDoc(gameDocRef, {
           status: "game-finished",
@@ -647,7 +647,7 @@ export const HiddenWordGameProvider = ({
     });
 
     // Check win conditions
-    const winCheck = checkWinConditions(updatedPlayers);
+    const winCheck = checkWinConditions(updatedPlayers, true);
     if (winCheck.winner) {
       await updateDoc(gameDocRef, {
         status: "game-finished",

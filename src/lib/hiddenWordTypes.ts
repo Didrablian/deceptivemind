@@ -212,7 +212,7 @@ export const assignRoles = (players: HiddenWordPlayer[], hasJester: boolean = tr
   });
 };
 
-export const checkWinConditions = (players: HiddenWordPlayer[]): {
+export const checkWinConditions = (players: HiddenWordPlayer[], executedInVoting?: boolean): {
   winner?: "villagers" | "imposters" | "jester";
   message?: string;
 } => {
@@ -221,12 +221,12 @@ export const checkWinConditions = (players: HiddenWordPlayer[]): {
   const aliveImposters = alivePlayers.filter(p => p.role === "imposter");
   const aliveJester = alivePlayers.filter(p => p.role === "jester");
 
-  // Jester wins if executed
+  // Jester wins ONLY if executed by voting (not by imposters)
   const executedJester = players.find(p => !p.isAlive && p.role === "jester");
-  if (executedJester) {
+  if (executedJester && executedInVoting) {
     return {
       winner: "jester",
-      message: "The Jester wins by being executed!"
+      message: "The Jester wins by being voted out!"
     };
   }
 
